@@ -265,7 +265,6 @@ export function buildBatchComparePreview(workspaceId: string): WorkspacePreviewD
   const preview = buildMacWorkspacePreview(workspaceId);
   const batch = preview.history.slice(0, 6).map((item, index) => ({
     ...item,
-    batchId: "preview-batch",
     previewUrl: previewImageUrl(
       `B${index + 1}`,
       196 + index * 17,

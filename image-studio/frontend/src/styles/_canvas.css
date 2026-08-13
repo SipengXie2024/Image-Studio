@@ -1068,7 +1068,7 @@ html.dark .batch-grid-reject-button {
     min-width: 0;
     padding-inline: 6px;
   }
-  .batch-grid {
+  .batch-grid:not(.single-slot) {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
   .batch-grid.fill-grid {

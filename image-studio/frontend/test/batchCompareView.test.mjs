@@ -52,9 +52,6 @@ test("batch comparison preview keeps existing visual fixtures unchanged", () => 
 
   assert.equal(baseline.history.some((item) => item.batchId === "preview-batch"), false);
   assert.equal(baseline.history[0].previewUrl.includes("width%3D%22480%22"), true);
-  assert.deepEqual(
-    comparison.history.slice(0, 6).map((item) => item.batchId),
-    Array(6).fill("preview-batch"),
-  );
+  assert.equal(comparison.history.slice(0, 6).some((item) => item.batchId), false);
   assert.equal(new Set(comparison.history.slice(0, 6).map((item) => item.previewUrl)).size, 6);
 });

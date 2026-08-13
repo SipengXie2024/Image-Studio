@@ -1652,7 +1652,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           ? buildBatchComparePreview(workspaceId)
           : buildMacWorkspacePreview(workspaceId);
       const batchPreviewResults = previewScenario === "batch-compare"
-        ? preview.history.filter((item) => item.batchId === "preview-batch").slice(0, 6)
+        ? preview.history.slice(0, 6)
         : [];
       await SetKeepLogsEnabled(readKeepLogs()).catch(() => undefined);
       await SetCleanupPreviewCacheOnExitEnabled(readCleanupPreviewCacheOnExit()).catch(() => undefined);
