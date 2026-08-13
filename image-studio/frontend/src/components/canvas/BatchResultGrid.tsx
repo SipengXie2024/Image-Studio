@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { HistoryItem } from "../../types/domain";
-import { historyPreviewSrc, useBlobURL } from "../../lib/images";
+import { historyFullSrc, historyPreviewSrc, useBlobURL } from "../../lib/images";
+import { batchCompareItemIds, batchTileIntent, resolveBatchFocus, stepBatchFocus } from "../../lib/batchCompareView";
 import { DragExportHandle } from "./DragExportHandle";
 
 export type BatchGridSlot =
@@ -13,6 +14,7 @@ export function BatchResultGrid({
   slots,
   currentId,
   onSelect,
+  onPreview,
   onClose,
   showClose = true,
   title,
@@ -31,6 +33,7 @@ export function BatchResultGrid({
   slots?: BatchGridSlot[];
   currentId: string | null;
   onSelect: (item: HistoryItem) => void | Promise<void>;
+  onPreview?: (item: HistoryItem) => HistoryItem | Promise<HistoryItem>;
   onClose: () => void;
   showClose?: boolean;
   title?: string;
@@ -55,15 +58,76 @@ export function BatchResultGrid({
   const rows = Math.min(3, Math.ceil(Math.max(gridSlots.length, 1) / columns));
   const scrollGrid = !singleLivePreview && !singlePendingPreview && gridSlots.length > 9;
   const fillGrid = !singleLivePreview && !singlePendingPreview && !scrollGrid;
+  const [focusedPreview, setFocusedPreview] = useState<HistoryItem | null>(null);
+  const [focusLoading, setFocusLoading] = useState(false);
+  const [focusLoadError, setFocusLoadError] = useState<string | null>(null);
+  const focusRequestRef = useRef(0);
+  const itemIds = batchCompareItemIds(orderedItems);
+  const focusedId = resolveBatchFocus(itemIds, focusedPreview?.id ?? null);
+  const focusedBatchItem = focusedId ? orderedItems.find((item) => item.id === focusedId) ?? null : null;
+  const focusedItem = focusedBatchItem && focusedPreview?.id === focusedId
+    ? { ...focusedBatchItem, ...focusedPreview, tasteReview: focusedBatchItem.tasteReview }
+    : focusedBatchItem;
+
+  async function focusItem(item: HistoryItem) {
+    const request = ++focusRequestRef.current;
+    setFocusedPreview(item);
+    setFocusLoadError(null);
+    if (!onPreview) return;
+    setFocusLoading(true);
+    try {
+      const full = await onPreview(item);
+      if (focusRequestRef.current === request && full.id === item.id) {
+        setFocusedPreview(full);
+        if (full.previewOnly) setFocusLoadError("完整图片加载失败，当前显示缩略图");
+      }
+    } catch {
+      if (focusRequestRef.current === request) {
+        setFocusedPreview(item);
+        setFocusLoadError("完整图片加载失败，当前显示缩略图");
+      }
+    } finally {
+      if (focusRequestRef.current === request) setFocusLoading(false);
+    }
+  }
+
+  function closeFocus() {
+    focusRequestRef.current += 1;
+    setFocusedPreview(null);
+    setFocusLoading(false);
+    setFocusLoadError(null);
+  }
+
+  if (focusedItem && !livePreview && !selectionMode) {
+    return (
+      <FocusedBatchPreview
+        item={focusedItem}
+        items={orderedItems}
+        loading={focusLoading}
+        loadError={focusLoadError}
+        onBack={closeFocus}
+        onNavigate={(delta) => {
+          const nextId = stepBatchFocus(itemIds, focusedItem.id, delta);
+          const nextItem = orderedItems.find((item) => item.id === nextId);
+          if (nextItem) void focusItem(nextItem);
+        }}
+        onOpenInCanvas={() => void onSelect(focusedItem)}
+        onPick={reviewEnabled ? onPick : undefined}
+        onEdit={reviewEnabled ? onEdit : undefined}
+        onShowItem={(item) => void focusItem(item)}
+        onRetry={() => void focusItem(focusedItem)}
+      />
+    );
+  }
 
   if (singlePendingPreview) {
     return (
       <div className="batch-grid-overlay live-preview-grid single-pending">
         <div className="batch-grid-head">
-          <span className="batch-grid-title">{title ?? `本批结果 · ${items.length} 张`}</span>
+          <span className="batch-grid-title">{title ?? `批次对比 · ${items.length} 张`}</span>
           {showClose ? (
-            <button type="button" className="batch-grid-close" onClick={onClose} title="返回当前图">
-              返回当前图
+            <button type="button" className="batch-grid-close" onClick={onClose} title="关闭批次对比">
+              进入单图编辑
             </button>
           ) : null}
         </div>
@@ -81,7 +145,10 @@ export function BatchResultGrid({
   return (
     <div className={`batch-grid-overlay ${livePreview ? "live-preview-grid" : ""} ${singleLivePreview ? "single-slot" : ""}`}>
       <div className={`batch-grid-head ${singleLivePreview ? "single-slot" : ""}`}>
-        <span className="batch-grid-title">{title ?? `本批结果 · ${items.length} 张`}</span>
+        <div className="batch-grid-heading">
+          <span className="batch-grid-title">{title ?? `批次对比 · ${items.length} 张`}</span>
+          {!livePreview && !selectionMode ? <span className="batch-grid-hint">全部图片完整显示；点击任意图片查看大图</span> : null}
+        </div>
         {!livePreview && onRunCritic ? (
           <button
             type="button"
@@ -93,8 +160,8 @@ export function BatchResultGrid({
           </button>
         ) : null}
         {showClose ? (
-          <button type="button" className="batch-grid-close" onClick={onClose} title="返回当前图">
-            返回当前图
+          <button type="button" className="batch-grid-close" onClick={onClose} title="关闭批次对比，返回当前图片">
+            进入单图编辑
           </button>
         ) : null}
       </div>
@@ -118,6 +185,7 @@ export function BatchResultGrid({
               active={slot.type === "result" && slot.item.id === currentId}
               preview={slot.type === "preview"}
               onSelect={onSelect}
+              onPreview={!livePreview && !selectionMode && onPreview ? focusItem : undefined}
               selected={slot.type === "result" && !!selectedIds?.has(slot.item.id)}
               onToggleSelect={onToggleSelect}
               selectionMode={selectionMode}
@@ -136,8 +204,8 @@ export function BatchResultGrid({
               : criticRunning
                 ? "正在按原提示词与已确认品味评审；不会改写提示词。"
                 : items.some((item) => item.tasteReview)
-                  ? "Top-3 已前置；DQ 只会被淘汰，不会因高分复活。普通点击仍仅查看。"
-                  : "普通点击仅查看；只有下方明确操作会记录你的选择。"}
+                  ? "Top-3 已前置；DQ 只会被淘汰。点击图片只看大图，不会退出或记录选择。"
+                  : "点击图片只看大图；只有“选定”或“全部不满意”才会记录你的选择。"}
           </span>
           {onRejectAll ? (
             <button type="button" className="batch-grid-reject-button" onClick={() => onRejectAll(items)}>
@@ -156,6 +224,7 @@ function BatchGridTile({
   active,
   preview,
   onSelect,
+  onPreview,
   selected,
   onToggleSelect,
   selectionMode,
@@ -168,6 +237,7 @@ function BatchGridTile({
   active: boolean;
   preview: boolean;
   onSelect: (item: HistoryItem) => void | Promise<void>;
+  onPreview?: (item: HistoryItem) => void | Promise<void>;
   selected: boolean;
   onToggleSelect?: (item: HistoryItem) => void;
   selectionMode: boolean;
@@ -201,13 +271,20 @@ function BatchGridTile({
         type="button"
         className={`batch-grid-tile-button ${singleLayout ? "single-layout" : ""}`}
         onClick={() => {
-          if (selectionMode && !preview) {
-            onToggleSelect?.(item);
-            return;
+          switch (batchTileIntent({ selectionMode, preview, canFocusPreview: !!onPreview })) {
+            case "toggle-selection":
+              onToggleSelect?.(item);
+              break;
+            case "focus-preview":
+              void onPreview?.(item);
+              break;
+            case "open-single":
+              void onSelect(item);
+              break;
           }
-          if (!preview) void onSelect(item);
         }}
         disabled={preview}
+        title={!preview && onPreview ? "查看大图（不会退出本批）" : undefined}
       >
         <span className="batch-grid-media">
           <img
@@ -250,12 +327,149 @@ function BatchGridTile({
           ) : null}
           {onEdit ? (
             <button type="button" className="batch-grid-review-button edit" onClick={() => onEdit(item)}>
-              {tasteReview?.disqualified ? "仍选定并提建议" : "选定并提建议"}
+              <span className="review-label-wide">{tasteReview?.disqualified ? "仍选定并提建议" : "选定并提建议"}</span>
+              <span className="review-label-compact">选定+建议</span>
             </button>
           ) : null}
         </div>
       ) : null}
     </div>
+  );
+}
+
+function FocusedBatchPreview({
+  item,
+  items,
+  loading,
+  loadError,
+  onBack,
+  onNavigate,
+  onOpenInCanvas,
+  onPick,
+  onEdit,
+  onShowItem,
+  onRetry,
+}: {
+  item: HistoryItem;
+  items: HistoryItem[];
+  loading: boolean;
+  loadError: string | null;
+  onBack: () => void;
+  onNavigate: (delta: -1 | 1) => void;
+  onOpenInCanvas: () => void;
+  onPick?: (item: HistoryItem) => void | Promise<void>;
+  onEdit?: (item: HistoryItem) => void;
+  onShowItem: (item: HistoryItem) => void;
+  onRetry: () => void;
+}) {
+  const objectURL = useBlobURL(item.imageBlob ?? item.previewBlob ?? null, item.imageB64 ?? null);
+  const src = historyFullSrc(item, objectURL);
+  const index = items.findIndex((candidate) => candidate.id === item.id);
+  const [pickBusy, setPickBusy] = useState(false);
+  const pickBusyRef = useRef(false);
+
+  async function pick() {
+    if (!onPick || pickBusyRef.current) return;
+    pickBusyRef.current = true;
+    setPickBusy(true);
+    try {
+      await onPick(item);
+    } catch {
+      pickBusyRef.current = false;
+      setPickBusy(false);
+    }
+  }
+
+  return (
+    <div className="batch-grid-overlay batch-focus-overlay">
+      <div className="batch-grid-head">
+        <div className="batch-grid-heading">
+          <span className="batch-grid-title">大图预览 · {index + 1}/{items.length}</span>
+          <span className="batch-grid-hint">预览不会退出本批，下面可直接切换其他图片</span>
+        </div>
+        <button type="button" className="batch-grid-close batch-focus-back" onClick={onBack}>
+          返回全部 {items.length} 张
+        </button>
+      </div>
+      <div className="batch-focus-stage">
+        <button type="button" className="batch-focus-nav previous" onClick={() => onNavigate(-1)} aria-label="上一张">
+          ‹
+        </button>
+        <div className="batch-focus-media">
+          <img src={src} alt={item.prompt || `batch result ${index + 1}`} draggable={false} />
+          {loading ? <span className="batch-focus-loading">正在加载完整图片…</span> : null}
+          {!loading && loadError ? (
+            <button type="button" className="batch-focus-loading error" onClick={onRetry}>
+              {loadError} · 重试
+            </button>
+          ) : null}
+          {item.tasteReview ? (
+            <span className={`batch-grid-critic-badge ${item.tasteReview.disqualified ? "dq" : item.tasteReview.top3 ? "top" : ""}`}>
+              {item.tasteReview.disqualified
+                ? `DQ · ${item.tasteReview.disqualificationReasons.map(criticReasonLabel).join("/")}`
+                : `${item.tasteReview.rank ? `#${item.tasteReview.rank} · ` : ""}${Math.round(item.tasteReview.score)} 分`}
+            </span>
+          ) : null}
+        </div>
+        <button type="button" className="batch-focus-nav next" onClick={() => onNavigate(1)} aria-label="下一张">
+          ›
+        </button>
+      </div>
+      <div className="batch-focus-strip" aria-label="本批全部图片">
+        {items.map((candidate, candidateIndex) => (
+          <FocusThumbnail
+            key={candidate.id}
+            item={candidate}
+            index={candidateIndex}
+            active={candidate.id === item.id}
+            onClick={() => onShowItem(candidate)}
+          />
+        ))}
+      </div>
+      <div className="batch-focus-actions">
+        <button type="button" className="batch-focus-secondary" onClick={onOpenInCanvas}>
+          在单图画布编辑
+        </button>
+        <span className="batch-focus-spacer" />
+        {onPick ? (
+          <button type="button" className="batch-grid-review-button pick" onClick={() => void pick()} disabled={pickBusy}>
+            {pickBusy ? "记录中…" : item.tasteReview?.disqualified ? "仍选定这张" : "选定这张"}
+          </button>
+        ) : null}
+        {onEdit ? (
+          <button type="button" className="batch-grid-review-button edit" onClick={() => onEdit(item)}>
+            {item.tasteReview?.disqualified ? "仍选定并提建议" : "选定并提建议"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function FocusThumbnail({
+  item,
+  index,
+  active,
+  onClick,
+}: {
+  item: HistoryItem;
+  index: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const objectURL = useBlobURL(item.imageBlob ?? item.previewBlob ?? null, item.imageB64 ?? null);
+  const src = historyPreviewSrc(item, objectURL);
+  return (
+    <button
+      type="button"
+      className={`batch-focus-thumb ${active ? "active" : ""}`}
+      onClick={onClick}
+      aria-label={`查看第 ${index + 1} 张`}
+      aria-current={active ? "true" : undefined}
+    >
+      <img src={src} alt="" draggable={false} />
+      <span>{index + 1}</span>
+    </button>
   );
 }
 

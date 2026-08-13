@@ -238,9 +238,9 @@ export function ResultMetaSection({
         <ToolbarTextButton
           onClick={onToggleResultGrid}
           selected={resultGridOpen}
-          title={resultGridOpen ? "返回当前图" : "查看本批多图网格"}
+          title={resultGridOpen ? "进入单图编辑" : `返回本批 ${batchResultCount} 张图片进行对比`}
         >
-          {resultGridOpen ? "单图" : `网格 ${batchResultCount}`}
+          {resultGridOpen ? "进入单图" : `批次对比 ${batchResultCount}`}
         </ToolbarTextButton>
       ) : null}
       <HistoryMetaBadges items={metaBadges} compact className="opacity-90" />

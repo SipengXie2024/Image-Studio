@@ -157,7 +157,7 @@ import {
   supportsPreciseSizeControl,
 } from "../components/panel/sizeCapabilities";
 import { normalizeQualitySelection } from "../components/panel/panelOptions";
-import { buildMacWorkspacePreview, buildWindowsRightRailPreview, readPreviewScenario } from "../app/dev/previewData";
+import { buildBatchComparePreview, buildMacWorkspacePreview, buildWindowsRightRailPreview, readPreviewScenario } from "../app/dev/previewData";
 import {
   applyTheme,
   augmentPromptWithAnnotations,
@@ -1644,17 +1644,29 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   bootstrap: async () => {
     const previewScenario = readPreviewScenario();
-    if (previewScenario === "mac-workspace" || previewScenario === "windows-right-rail") {
+    if (previewScenario === "mac-workspace" || previewScenario === "windows-right-rail" || previewScenario === "batch-compare") {
       const workspaceId = genId();
       const preview = previewScenario === "windows-right-rail"
         ? buildWindowsRightRailPreview(workspaceId)
-        : buildMacWorkspacePreview(workspaceId);
+        : previewScenario === "batch-compare"
+          ? buildBatchComparePreview(workspaceId)
+          : buildMacWorkspacePreview(workspaceId);
+      const batchPreviewResults = previewScenario === "batch-compare"
+        ? preview.history.filter((item) => item.batchId === "preview-batch").slice(0, 6)
+        : [];
       await SetKeepLogsEnabled(readKeepLogs()).catch(() => undefined);
       await SetCleanupPreviewCacheOnExitEnabled(readCleanupPreviewCacheOnExit()).catch(() => undefined);
-      applyTheme(previewScenario === "windows-right-rail" ? "light" : "dark");
+      applyTheme(previewScenario === "mac-workspace" ? "dark" : "light");
       document.documentElement.style.setProperty("--font-scale", "1");
       setKernelRuntimeMode("auto");
-      const workspaceState = preview.workspace;
+      const workspaceState = batchPreviewResults.length > 1
+        ? {
+            ...preview.workspace,
+            currentImageId: batchPreviewResults[0]?.id ?? preview.workspace.currentImageId,
+            batchResultIds: batchPreviewResults.map((item) => item.id),
+            resultGridOpen: true,
+          }
+        : preview.workspace;
       set({
         apiKey: "sk-preview",
         mode: workspaceState.mode,
@@ -1700,13 +1712,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         isRunning: false,
         lastPayload: null,
         runningJobMeta: {},
-        currentImage: preview.currentImage,
+        currentImage: batchPreviewResults[0] ?? preview.currentImage,
         history: preview.history,
         historyHasMore: false,
         historyLoading: false,
         historyCursorBeforeDayStart: null,
-        batchResults: [],
-        resultGridOpen: false,
+        batchResults: batchPreviewResults,
+        resultGridOpen: batchPreviewResults.length > 1,
         historyRailCollapsed: false,
         historyTimelineOpen: false,
         tool: "pan",
@@ -1735,7 +1747,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         loopGeneration: normalizeLoopGenerationConfig(workspaceState.loopGeneration),
         presets: preview.presets ?? [],
         customAspectRatios: [],
-        theme: previewScenario === "windows-right-rail" ? "light" : "dark",
+        theme: previewScenario === "mac-workspace" ? "dark" : "light",
         fontScale: 1,
         workspaces: [workspaceState],
         activeWorkspaceId: workspaceId,

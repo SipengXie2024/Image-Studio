@@ -41,7 +41,7 @@ export function CanvasStage({ reviewCallbacks }: { reviewCallbacks?: BatchReview
     jobsCompleted,
     toggleFullscreen,
     history,
-    batchResults, resultGridOpen, selectBatchResult, closeResultGrid,
+    batchResults, resultGridOpen, selectBatchResult, closeResultGrid, materializeCurrentImage,
     pickBatchResult, editBatchResult, rejectBatch,
     tasteCriticRunning, tasteCriticError, tasteCriticBatchId, reviewBatchWithTasteCritic,
     canvasViewResetTick,
@@ -498,6 +498,7 @@ export function CanvasStage({ reviewCallbacks }: { reviewCallbacks?: BatchReview
             slots={showingLiveBatchGrid ? liveBatchSlots : undefined}
             currentId={currentImage?.id ?? null}
             onSelect={selectBatchResult}
+            onPreview={materializeCurrentImage}
             onClose={closeResultGrid}
             showClose={!showingLiveBatchGrid}
             title={showingLiveBatchGrid ? `当前并发预览 · ${runningJobs.length} 路 · ${jobsCompleted}/${jobsTotal}` : undefined}
