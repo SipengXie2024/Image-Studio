@@ -88,6 +88,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
     clearHistory: clearStoredHistory,
     exportHistory, importHistory,
     pruneHistoryOlderThanDays,
+    rescanTasteHistory,
     setTheme, setFontScale,
     pushToast,
     apiKey, baseURL, apiMode,
@@ -328,6 +329,12 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
       onOpenRepo={() => openExternal(REPO_URL)}
       onOpenUpstream={() => openUpstreamConfig("settings")}
       onPreviewCompletionSound={() => void previewCompletionSound()}
+      onRescanTaste={() => {
+        closeSettings();
+        void rescanTasteHistory().catch((error) => {
+          pushToast(`归纳品味失败：${error instanceof Error ? error.message : String(error)}`, "error", 5000);
+        });
+      }}
       onResetCompletionSound={() => {
         resetCompletionSoundCustom();
         pushToast("已恢复默认提示音", "success");

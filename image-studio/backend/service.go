@@ -217,9 +217,8 @@ func (s *Service) Edit(opts GenerateOptions) (JobStarted, error) {
 	return s.startJob(opts)
 }
 
-// OptimizePrompt uses the configured LLM to rewrite the current prompt into a
-// cleaner image prompt. If edit source images are provided, they are included
-// as visual context. The original prompt is not mutated by the backend.
+// OptimizePrompt runs one of the text-model operations selected by Mode. The
+// original prompt is never mutated by the backend.
 func (s *Service) OptimizePrompt(opts PromptOptimizeOptions) (string, error) {
 	if s.ctx == nil {
 		return "", errors.New("服务未启动")
@@ -233,6 +232,9 @@ func (s *Service) OptimizePrompt(opts PromptOptimizeOptions) (string, error) {
 	}
 	if operation == "describe" && len(opts.collectPaths()) == 0 {
 		return "", errors.New("图片反推必须提供画布图片")
+	}
+	if operation == "critic" && len(opts.collectPaths()) == 0 {
+		return "", errors.New("批次评审必须提供候选图片")
 	}
 	baseURL, err := client.ValidateBaseURLWithSecurity(opts.BaseURL, opts.AllowInsecureConnection)
 	if err != nil {

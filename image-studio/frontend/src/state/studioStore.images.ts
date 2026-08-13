@@ -205,7 +205,7 @@ export function createImageActions(store: StateAdapter) {
 
     applyHistoryParams(item: HistoryItem) {
       const patch: Partial<StudioState> = {
-        prompt: item.prompt ?? "",
+        prompt: item.originalPrompt ?? item.prompt ?? "",
         mode: item.mode,
         size: item.size,
         quality: item.quality,

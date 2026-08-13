@@ -39,6 +39,7 @@ import {
   invokeAndroid,
   invokeService,
 } from "./hostBindings.ts";
+import { prepareNativePromptImagePaths } from "./nativePromptSources.ts";
 import type {
   BatchInputDirectoryLike,
   CodexAPIConfigLike,
@@ -313,13 +314,22 @@ export function Edit(options: GenerateOptionsLike): Promise<JobStartedLike> {
   return startRemoteJob({ ...options, mode: "edit" });
 }
 
-export function OptimizePrompt(options: PromptOptimizeOptionsLike): Promise<string> {
+export async function OptimizePrompt(options: PromptOptimizeOptionsLike): Promise<string> {
   if (getForcedKernelRuntimeMode() === "local" && detectHostKind() !== "wails-desktop") {
     return Promise.reject(new Error("当前宿主不支持强制本地内核"));
   }
   if (getHostCapabilities().promptOptimization) {
     const { sourceImages: _sourceImages, ...nativeOptions } = options;
-    return invokeService<string>(unsupportedMessage, "OptimizePrompt", nativeOptions);
+    const imagePaths = await prepareNativePromptImagePaths(options, {
+      importImageFromBase64: ImportImageFromB64,
+      readNonNativePathAsBase64: async (path) => readVirtualImageAsBase64(path),
+      readNativePathAsBase64: ReadImageAsBase64,
+    });
+    return invokeService<string>(unsupportedMessage, "OptimizePrompt", {
+      ...nativeOptions,
+      imagePaths,
+      imagePath: "",
+    });
   }
   const controller = new AbortController();
   return optimizePromptRemote({

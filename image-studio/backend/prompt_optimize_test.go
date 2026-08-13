@@ -2,11 +2,13 @@ package backend
 
 import (
 	"bytes"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -100,6 +102,52 @@ func TestOptimizePromptRejectsEmptyPrompt(t *testing.T) {
 func TestDescribePromptRequiresCanvasImage(t *testing.T) {
 	if _, err := optimizePromptWithLLM(t.Context(), "https://example.com", "sk-test", "", "describe", "", nil, client.ProxyConfig{}, false); err == nil || !strings.Contains(err.Error(), "画布图片") {
 		t.Fatalf("expected canvas image error, got %v", err)
+	}
+}
+
+func TestCriticRequiresCandidateImages(t *testing.T) {
+	if _, err := optimizePromptWithLLM(t.Context(), "https://example.com", "sk-test", "", "critic", "{}", nil, client.ProxyConfig{}, false); err == nil || !strings.Contains(err.Error(), "候选图片") {
+		t.Fatalf("expected critic image error, got %v", err)
+	}
+}
+
+func TestApplyCriticTextFormatUsesResponsesJSONSchema(t *testing.T) {
+	schema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"schemaVersion"},
+		"properties": map[string]any{
+			"schemaVersion": map[string]any{"const": float64(1)},
+		},
+	}
+	request, err := json.Marshal(map[string]any{"responseSchema": schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{"model": "gpt-5.5"}
+	if err := applyCriticTextFormat(payload, string(request)); err != nil {
+		t.Fatal(err)
+	}
+
+	text, ok := payload["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing text config: %#v", payload["text"])
+	}
+	format, ok := text["format"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing text format: %#v", text["format"])
+	}
+	if format["type"] != "json_schema" || format["name"] != "taste_critic_response" || format["strict"] != true {
+		t.Fatalf("unexpected text format: %#v", format)
+	}
+	if !reflect.DeepEqual(format["schema"], schema) {
+		t.Fatalf("schema changed: %#v", format["schema"])
+	}
+}
+
+func TestApplyCriticTextFormatRejectsMissingSchema(t *testing.T) {
+	if err := applyCriticTextFormat(map[string]any{}, `{}`); err == nil || !strings.Contains(err.Error(), "responseSchema") {
+		t.Fatalf("expected responseSchema error, got %v", err)
 	}
 }
 

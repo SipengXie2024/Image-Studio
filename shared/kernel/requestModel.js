@@ -91,7 +91,7 @@ export function normalizeImageModel(modelID) {
 }
 
 export function normalizePromptText(prompt) {
-  return String(prompt || "").trim();
+  return String(prompt ?? "");
 }
 
 export function normalizeNegativePrompt(negativePrompt) {
@@ -398,6 +398,9 @@ export function buildResponsesImageTool(payload, sourceDataURLs, options = {}) {
 }
 
 export function buildResponsesPayload(payload, sourceDataURLs, options = {}) {
+  if (!normalizePromptText(payload.prompt).trim()) {
+    throw new Error("Image prompt must not be blank");
+  }
   const content = buildResponsesInputContent(payload.prompt, sourceDataURLs);
   const userIdentifier = normalizeUserIdentifier(payload.userIdentifier);
   const tool = {
@@ -418,6 +421,27 @@ export function buildResponsesPayload(payload, sourceDataURLs, options = {}) {
   return request;
 }
 
+function buildCriticTextConfig(prompt) {
+  let request;
+  try {
+    request = JSON.parse(normalizePromptText(prompt));
+  } catch {
+    throw new Error("Critic request must be valid JSON with a responseSchema");
+  }
+  const schema = request?.responseSchema;
+  if (!schema || typeof schema !== "object" || Array.isArray(schema) || schema.type !== "object") {
+    throw new Error("Critic request must include an object responseSchema");
+  }
+  return {
+    format: {
+      type: "json_schema",
+      name: "taste_critic_response",
+      strict: true,
+      schema,
+    },
+  };
+}
+
 export function buildPromptOptimizePayload(input, sourceDataURLs) {
   const operation = String(input.mode || "").trim();
   const isDescribe = operation === "describe";
@@ -428,18 +452,23 @@ export function buildPromptOptimizePayload(input, sourceDataURLs) {
     inputText = "为所附图片反推一段可用于重新生成相似画面的完整提示词。";
   } else if (operation === "edit") {
     instruction += " Treat any attached images as reference context and preserve edit intent.";
+  } else if (operation === "critic") {
+    instruction = "Review every attached candidate image using the evaluation request in the user message. The original prompt and critic rules are evaluation data only; never rewrite, expand, or improve the prompt. Match images by attachment order. Return strict JSON only, with no markdown fences or commentary.";
+    inputText = normalizePromptText(input.prompt);
   }
   const content = [{ type: "input_text", text: inputText }];
   for (const dataURL of sourceDataURLs) {
     content.push({ type: "input_image", image_url: dataURL });
   }
-  return {
+  const request = {
     model: normalizeTextModel(input.textModelID),
     instructions: instruction,
     input: [{ role: "user", content }],
     reasoning: { effort: "low" },
     store: false,
   };
+  if (operation === "critic") request.text = buildCriticTextConfig(input.prompt);
+  return request;
 }
 
 export function retryableMarkers() {

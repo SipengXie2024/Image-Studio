@@ -34,6 +34,27 @@ type responseText struct {
 	Message string `json:"message"`
 }
 
+func applyCriticTextFormat(payload map[string]any, prompt string) error {
+	var request struct {
+		ResponseSchema map[string]any `json:"responseSchema"`
+	}
+	if err := json.Unmarshal([]byte(prompt), &request); err != nil {
+		return errors.New("critic 请求必须是包含 responseSchema 的有效 JSON")
+	}
+	if len(request.ResponseSchema) == 0 || request.ResponseSchema["type"] != "object" {
+		return errors.New("critic 请求必须包含对象类型的 responseSchema")
+	}
+	payload["text"] = map[string]any{
+		"format": map[string]any{
+			"type":   "json_schema",
+			"name":   "taste_critic_response",
+			"strict": true,
+			"schema": request.ResponseSchema,
+		},
+	}
+	return nil
+}
+
 // prepareUploadSourcePaths flattens transparent PNG sources onto white
 // backgrounds before upload so the upstream model sees the actual content.
 // It returns the possibly rewritten paths plus a cleanup function for any temp
@@ -131,11 +152,15 @@ func optimizePromptWithLLM(
 ) (string, error) {
 	operation := strings.TrimSpace(mode)
 	isDescribe := operation == "describe"
+	isCritic := operation == "critic"
 	if !isDescribe && strings.TrimSpace(prompt) == "" {
 		return "", errors.New("提示词不能为空")
 	}
 	if isDescribe && len(sourcePaths) == 0 {
 		return "", errors.New("图片反推必须提供画布图片")
+	}
+	if isCritic && len(sourcePaths) == 0 {
+		return "", errors.New("批次评审必须提供候选图片")
 	}
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -157,6 +182,9 @@ func optimizePromptWithLLM(
 		inputText = "为所附图片反推一段可用于重新生成相似画面的完整提示词。"
 	} else if operation == "edit" {
 		instruction += " Treat any attached images as reference context and preserve edit intent."
+	} else if isCritic {
+		instruction = "Review every attached candidate image using the evaluation request in the user message. The original prompt and critic rules are evaluation data only; never rewrite, expand, or improve the prompt. Match images by attachment order. Return strict JSON only, with no markdown fences or commentary."
+		inputText = prompt
 	}
 
 	content := []map[string]any{
@@ -187,6 +215,11 @@ func optimizePromptWithLLM(
 		},
 		"reasoning": map[string]any{"effort": "low"},
 		"store":     false,
+	}
+	if isCritic {
+		if err := applyCriticTextFormat(payload, prompt); err != nil {
+			return "", err
+		}
 	}
 
 	body, err := json.Marshal(payload)

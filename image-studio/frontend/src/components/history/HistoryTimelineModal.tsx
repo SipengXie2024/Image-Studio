@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Loader2, Search } from "lucide-react";
+import { CalendarDays, Loader2, Search, Sparkles } from "lucide-react";
 import { Modal } from "../common/Modal";
 import { useStudioStore } from "../../state/studioStore";
 import type { HistoryItem, Mode } from "../../types/domain";
@@ -40,6 +40,9 @@ export function HistoryTimelineModal() {
     regenerateFromHistory,
     openResultDetail,
     pushToast,
+    tasteLoading,
+    rescanTasteHistory,
+    closeTasteBootstrap,
   } = useStudioStore();
   const { usesFluentUI } = usePlatform();
   const [query, setQuery] = useState("");
@@ -105,6 +108,16 @@ export function HistoryTimelineModal() {
     }
   }
 
+  async function openTasteSummary() {
+    try {
+      await rescanTasteHistory();
+      closeHistoryTimeline();
+    } catch (error) {
+      closeTasteBootstrap();
+      pushToast(`归纳品味失败:${error instanceof Error ? error.message : String(error)}`, "error", 5000);
+    }
+  }
+
   useEffect(() => {
     if (!historyTimelineOpen) return;
     if (query.trim() || modeFilter !== "all" || dateFilter !== "all") {
@@ -126,6 +139,18 @@ export function HistoryTimelineModal() {
   return (
     <Modal open onClose={closeHistoryTimeline} title="更多历史" width={920}>
       <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-black/[0.06] bg-black/[0.02] px-3 py-2.5 dark:border-white/[0.06] dark:bg-white/[0.03]">
+          <p className="text-xs leading-5 text-zinc-500 dark:text-zinc-300">从明确的风格字段归纳待确认线索，不会把普通提示词直接当作偏好。</p>
+          <button
+            type="button"
+            onClick={() => void openTasteSummary()}
+            disabled={tasteLoading}
+            className={`platform-pill inline-flex min-h-[34px] items-center justify-center gap-1.5 border border-[color:var(--accent)]/20 px-3 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50 ${usesFluentUI ? "rounded-[8px]" : "rounded-full"}`}
+          >
+            {tasteLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            归纳品味
+          </button>
+        </div>
         <div className="grid grid-cols-[minmax(0,1fr)_140px_140px] gap-2">
           <label className={`flex items-center gap-2 border border-black/[0.08] bg-[var(--surface)] px-3 py-2.5 dark:border-white/[0.08] ${usesFluentUI ? "rounded-[10px]" : "rounded-[16px]"}`}>
             <Search className="h-3.5 w-3.5 text-zinc-400" />

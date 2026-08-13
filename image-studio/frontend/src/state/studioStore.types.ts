@@ -37,6 +37,15 @@ import type {
   Workspace,
 } from "../types/domain";
 import type { RunningJobMeta } from "./workspaceRuntime";
+import type { TasteCandidate } from "../lib/tasteLearning";
+
+export interface TasteProfileState {
+  schemaVersion: 1;
+  candidates: TasteCandidate[];
+  approvedCandidateIds: string[];
+  updatedAt: number;
+  bootstrapAcknowledged: boolean;
+}
 
 export interface ModeConfig {
   baseURL: string;
@@ -49,7 +58,7 @@ export interface ModeConfig {
 export interface PromptOptimizeRequest {
   apiKey: string;
   prompt: string;
-  mode: Mode | "describe";
+  mode: Mode | "describe" | "critic";
   baseURL: string;
   textModelID: string;
   proxyMode: ProxyMode;
@@ -138,6 +147,12 @@ export interface StudioState {
   resultGridOpen: boolean;
   historyRailCollapsed: boolean;
   historyTimelineOpen: boolean;
+  tasteProfile: TasteProfileState;
+  tasteBootstrapOpen: boolean;
+  tasteLoading: boolean;
+  tasteCriticRunning: boolean;
+  tasteCriticError: string | null;
+  tasteCriticBatchId: string | null;
   tool: "pan" | "mask" | "annotate";
   brushSize: number;
   brushMode: "paint" | "erase";
@@ -264,6 +279,18 @@ export interface StudioState {
   loadMoreHistory: () => Promise<void>;
   openHistoryTimeline: () => void;
   closeHistoryTimeline: () => void;
+  bootstrapTaste: () => Promise<void>;
+  rescanTasteHistory: () => Promise<void>;
+  decideTasteCandidate: (candidateId: string, decision: "approve" | "reject") => Promise<void>;
+  acknowledgeTasteBootstrap: () => Promise<void>;
+  closeTasteBootstrap: () => void;
+  pickBatchResult: (item: HistoryItem) => Promise<void>;
+  editBatchResult: (input: { item: HistoryItem; items: HistoryItem[]; note: string }) => Promise<void>;
+  rejectBatch: (input: { items: HistoryItem[]; note: string }) => Promise<void>;
+  reviewBatchWithTasteCritic: (options?: {
+    items?: HistoryItem[];
+    silent?: boolean;
+  }) => Promise<boolean>;
   pruneHistoryOlderThanDays: (days: number) => Promise<number>;
   savePreset: (name: string) => string | null;
   overwritePreset: (id: string) => boolean;

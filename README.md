@@ -66,6 +66,7 @@ Image Studio 面向 OpenAI 兼容图像上游，重点解决长时间图像推�
 | 提 Issue 前自查、数据存储位置、524/504、模型权限、字段兼容问题 | [docs/troubleshooting.md](./docs/troubleshooting.md) |
 | 仓库结构、前端分层、内核 / Worker / Android 关系 | [docs/project-structure.md](./docs/project-structure.md) |
 | 原始提示词传递策略 | [docs/no-prompt-revision/README.md](./docs/no-prompt-revision/README.md) |
+| 用户可控的品味学习、批次评审与历史启动层 | [docs/personal-taste-loop.md](./docs/personal-taste-loop.md) |
 | Android 壳层维护说明 | [android-shell/README.md](./android-shell/README.md) |
 | Gio 高性能测试客户端 | [docs/gio-client.md](./docs/gio-client.md) |
 | 跨平台内核计划与验证背景 | [docs/cross-platform-kernel-plan.md](./docs/cross-platform-kernel-plan.md) |

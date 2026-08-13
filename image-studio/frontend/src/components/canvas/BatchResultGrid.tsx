@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import type { HistoryItem } from "../../types/domain";
 import { historyPreviewSrc, useBlobURL } from "../../lib/images";
 import { DragExportHandle } from "./DragExportHandle";
@@ -19,6 +20,12 @@ export function BatchResultGrid({
   onToggleSelect,
   selectionMode = false,
   livePreview = false,
+  onPick,
+  onEdit,
+  onRejectAll,
+  criticRunning = false,
+  criticError = null,
+  onRunCritic,
 }: {
   items: HistoryItem[];
   slots?: BatchGridSlot[];
@@ -31,10 +38,19 @@ export function BatchResultGrid({
   onToggleSelect?: (item: HistoryItem) => void;
   selectionMode?: boolean;
   livePreview?: boolean;
+  onPick?: (item: HistoryItem) => void | Promise<void>;
+  onEdit?: (item: HistoryItem) => void;
+  onRejectAll?: (items: HistoryItem[]) => void;
+  criticRunning?: boolean;
+  criticError?: string | null;
+  onRunCritic?: () => void | Promise<unknown>;
 }) {
-  const gridSlots = slots ?? items.map((item) => ({ type: "result", item }) satisfies BatchGridSlot);
+  const orderedItems = slots || selectionMode ? items : sortTasteReviewedItems(items);
+  const gridSlots = slots ?? orderedItems.map((item) => ({ type: "result", item }) satisfies BatchGridSlot);
   const singlePendingPreview = livePreview && gridSlots.length === 1 && gridSlots[0]?.type === "pending";
   const singleLivePreview = livePreview && gridSlots.length === 1 && gridSlots[0]?.type !== "pending";
+  const reviewEnabled = !livePreview && !selectionMode && items.length > 0 && !!(onPick || onEdit || onRejectAll);
+  const tileReviewEnabled = reviewEnabled && !!(onPick || onEdit);
   const columns = singleLivePreview || singlePendingPreview ? 1 : gridSlots.length <= 4 ? 2 : 3;
   const rows = Math.min(3, Math.ceil(Math.max(gridSlots.length, 1) / columns));
   const scrollGrid = !singleLivePreview && !singlePendingPreview && gridSlots.length > 9;
@@ -66,6 +82,16 @@ export function BatchResultGrid({
     <div className={`batch-grid-overlay ${livePreview ? "live-preview-grid" : ""} ${singleLivePreview ? "single-slot" : ""}`}>
       <div className={`batch-grid-head ${singleLivePreview ? "single-slot" : ""}`}>
         <span className="batch-grid-title">{title ?? `本批结果 · ${items.length} 张`}</span>
+        {!livePreview && onRunCritic ? (
+          <button
+            type="button"
+            className="batch-grid-critic-button"
+            onClick={() => void onRunCritic()}
+            disabled={criticRunning}
+          >
+            {criticRunning ? "AI 评审中…" : items.some((item) => item.tasteReview) ? "重新评审" : "AI 评审"}
+          </button>
+        ) : null}
         {showClose ? (
           <button type="button" className="batch-grid-close" onClick={onClose} title="返回当前图">
             返回当前图
@@ -96,10 +122,30 @@ export function BatchResultGrid({
               onToggleSelect={onToggleSelect}
               selectionMode={selectionMode}
               singleLayout={singleLivePreview}
+              onPick={tileReviewEnabled ? onPick : undefined}
+              onEdit={tileReviewEnabled ? onEdit : undefined}
             />
           );
         })}
       </div>
+      {reviewEnabled ? (
+        <div className="batch-grid-review-footer">
+          <span>
+            {criticError
+              ? criticError
+              : criticRunning
+                ? "正在按原提示词与已确认品味评审；不会改写提示词。"
+                : items.some((item) => item.tasteReview)
+                  ? "Top-3 已前置；DQ 只会被淘汰，不会因高分复活。普通点击仍仅查看。"
+                  : "普通点击仅查看；只有下方明确操作会记录你的选择。"}
+          </span>
+          {onRejectAll ? (
+            <button type="button" className="batch-grid-reject-button" onClick={() => onRejectAll(items)}>
+              全部不满意
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -114,6 +160,8 @@ function BatchGridTile({
   onToggleSelect,
   selectionMode,
   singleLayout,
+  onPick,
+  onEdit,
 }: {
   item: HistoryItem;
   index: number;
@@ -124,12 +172,29 @@ function BatchGridTile({
   onToggleSelect?: (item: HistoryItem) => void;
   selectionMode: boolean;
   singleLayout: boolean;
+  onPick?: (item: HistoryItem) => void | Promise<void>;
+  onEdit?: (item: HistoryItem) => void;
 }) {
   const previewURL = useBlobURL(item.imageBlob ?? item.previewBlob ?? null, item.imageB64 ?? null);
   const src = historyPreviewSrc(item, previewURL);
+  const reviewEnabled = !!(onPick || onEdit);
+  const tasteReview = item.tasteReview;
+  const [pickBusy, setPickBusy] = useState(false);
+  const pickBusyRef = useRef(false);
+  async function pick() {
+    if (!onPick || pickBusyRef.current) return;
+    pickBusyRef.current = true;
+    setPickBusy(true);
+    try {
+      await onPick(item);
+    } catch {
+      pickBusyRef.current = false;
+      setPickBusy(false);
+    }
+  }
   return (
     <div
-      className={`batch-grid-tile ${active ? "active" : ""} ${preview ? "previewing" : ""} ${selected ? "selected" : ""} ${selectionMode ? "selection-mode" : ""}`}
+      className={`batch-grid-tile ${active ? "active" : ""} ${preview ? "previewing" : ""} ${selected ? "selected" : ""} ${selectionMode ? "selection-mode" : ""} ${reviewEnabled ? "review-mode" : ""}`}
       title={item.prompt}
     >
       <button
@@ -162,10 +227,53 @@ function BatchGridTile({
         {selectionMode && !preview ? <span className="batch-grid-check">{selected ? "已选" : "未选"}</span> : null}
         {preview ? <span className="batch-grid-meta">预览中</span> : null}
         {!preview && item.elapsedSec ? <span className="batch-grid-meta">{item.elapsedSec}s</span> : null}
+        {!preview && !selectionMode && tasteReview ? (
+          <span
+            className={`batch-grid-critic-badge ${tasteReview.disqualified ? "dq" : tasteReview.top3 ? "top" : ""}`}
+            title={tasteReview.disqualified
+              ? tasteReview.disqualificationReasons.map(criticReasonLabel).join("、")
+              : tasteReview.summary}
+          >
+            {tasteReview.disqualified
+              ? `DQ · ${tasteReview.disqualificationReasons.map(criticReasonLabel).join("/")}`
+              : `${tasteReview.rank ? `#${tasteReview.rank} · ` : ""}${Math.round(tasteReview.score)} 分`}
+          </span>
+        ) : null}
       </button>
       {!preview ? <DragExportHandle item={item} className="batch-grid-drag-export" /> : null}
+      {!preview && reviewEnabled ? (
+        <div className="batch-grid-review-actions">
+          {onPick ? (
+            <button type="button" className="batch-grid-review-button pick" onClick={() => void pick()} disabled={pickBusy}>
+              {pickBusy ? "记录中…" : tasteReview?.disqualified ? "仍选定" : "选定"}
+            </button>
+          ) : null}
+          {onEdit ? (
+            <button type="button" className="batch-grid-review-button edit" onClick={() => onEdit(item)}>
+              {tasteReview?.disqualified ? "仍选定并提建议" : "选定并提建议"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function sortTasteReviewedItems(items: HistoryItem[]): HistoryItem[] {
+  if (!items.some((item) => item.tasteReview)) return items;
+  return [...items].sort((left, right) => {
+    const leftReview = left.tasteReview;
+    const rightReview = right.tasteReview;
+    if (!!leftReview !== !!rightReview) return leftReview ? -1 : 1;
+    if (!leftReview || !rightReview) return (left.batchIndex ?? 0) - (right.batchIndex ?? 0);
+    if (leftReview.disqualified !== rightReview.disqualified) return leftReview.disqualified ? 1 : -1;
+    const rankDelta = (leftReview.rank ?? Number.MAX_SAFE_INTEGER) - (rightReview.rank ?? Number.MAX_SAFE_INTEGER);
+    return rankDelta || (left.batchIndex ?? 0) - (right.batchIndex ?? 0);
+  });
+}
+
+function criticReasonLabel(reason: "multiple-primary-subjects" | "multi-view-layout"): string {
+  return reason === "multiple-primary-subjects" ? "多主体" : "拼版/多视图";
 }
 
 function PendingGridTile({ index, singleLayout }: { index: number; singleLayout: boolean }) {

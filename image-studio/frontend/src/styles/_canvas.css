@@ -566,6 +566,9 @@ html.dark .stream-preview-badge {
 .batch-grid-tile.selection-mode .batch-grid-drag-export {
   display: none;
 }
+.batch-grid-tile.review-mode .batch-grid-drag-export {
+  display: none;
+}
 .batch-grid-tile.previewing {
   cursor: default;
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
@@ -689,6 +692,66 @@ html.dark .stream-preview-badge {
   padding-inline: 9px;
   font-size: 10px;
 }
+.batch-grid-review-actions {
+  position: absolute;
+  z-index: 2;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+.batch-grid-review-button {
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid rgb(255 255 255 / 0.22);
+  border-radius: 7px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.22);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  transition: transform 120ms, background 120ms;
+}
+.batch-grid-review-button:hover {
+  transform: translateY(-1px);
+}
+.batch-grid-review-button.pick {
+  background: color-mix(in srgb, var(--accent) 88%, black 12%);
+}
+.batch-grid-review-button.edit {
+  background: rgb(24 24 27 / 0.78);
+}
+.batch-grid-review-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.batch-grid-reject-button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, #ef4444 38%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #ef4444 8%, var(--surface));
+  color: #dc2626;
+  font-size: 11px;
+  font-weight: 600;
+  transition: border-color 120ms, background 120ms;
+}
+.batch-grid-reject-button:hover {
+  border-color: color-mix(in srgb, #ef4444 64%, var(--border));
+  background: color-mix(in srgb, #ef4444 14%, var(--surface));
+}
 .batch-grid-pending-ring {
   width: 34px;
   height: 34px;
@@ -774,6 +837,67 @@ html.dark .batch-grid-pending-stage-card {
   box-shadow:
     0 22px 56px rgb(0 0 0 / 0.28),
     inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+html.dark .batch-grid-reject-button {
+  color: #fca5a5;
+}
+
+.batch-grid-critic-button {
+  margin-left: auto;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+}
+.batch-grid-critic-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.batch-grid-critic-badge {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  z-index: 3;
+  padding: 4px 7px;
+  border: 1px solid rgb(255 255 255 / 0.34);
+  border-radius: 999px;
+  background: rgb(24 24 27 / 0.78);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+  color: #f4f4f5;
+  font-size: 10px;
+  font-weight: 700;
+  backdrop-filter: blur(8px);
+}
+.batch-grid-critic-badge.top {
+  background: color-mix(in srgb, var(--accent) 82%, rgb(24 24 27));
+}
+.batch-grid-critic-badge.dq {
+  background: rgb(185 28 28 / 0.9);
+}
+
+@media (max-width: 640px) {
+  .batch-grid-review-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .batch-grid-review-footer > span {
+    display: none;
+  }
+  .batch-grid-reject-button {
+    width: 100%;
+  }
+  .batch-grid-review-actions {
+    gap: 4px;
+  }
+  .batch-grid-review-button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 6px;
+  }
 }
 
 @media (max-width: 1100px) {

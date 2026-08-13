@@ -13,6 +13,11 @@ import { useCanvasShortcuts } from "../../../components/canvas/useCanvasShortcut
 import { historyFullSrc, orderedNavigationItemsForCurrent, sortHistoryItemsByCreatedAtAsc } from "../../../lib/images";
 import { streamPreviewItemsFromPreviews } from "../../../state/studioStore.streamPreview";
 import { vibrateForPlatform } from "../bridge";
+import {
+  FeedbackModal,
+  type BatchReviewCallbacks,
+  type FeedbackModalRequest,
+} from "../../../components/taste/FeedbackModal";
 
 type ViewState = { scale: number; x: number; y: number };
 type PinchState = {
@@ -25,7 +30,7 @@ const MIN_VIEW_SCALE = 0.05;
 const MAX_VIEW_SCALE = 8;
 const ZOOM_STEP = 1.2;
 
-export function AndroidCanvasStage() {
+export function AndroidCanvasStage({ reviewCallbacks }: { reviewCallbacks?: BatchReviewCallbacks } = {}) {
   const {
     currentImage, tool, brushSize, brushMode,
     annotationKind, annotationColor,
@@ -46,6 +51,8 @@ export function AndroidCanvasStage() {
     toggleFullscreen,
     history,
     batchResults, resultGridOpen, selectBatchResult, closeResultGrid,
+    pickBatchResult, editBatchResult, rejectBatch,
+    tasteCriticRunning, tasteCriticError, tasteCriticBatchId, reviewBatchWithTasteCritic,
     canvasViewResetTick,
     stepBatchResult,
   } = useStudioStore();
@@ -82,6 +89,11 @@ export function AndroidCanvasStage() {
   const showingResultGrid = showingLiveBatchGrid || (resultGridOpen && batchResults.length > 1);
   const currentBatchIndex = currentImage ? navigationItems.findIndex((item) => item.id === currentImage.id) : -1;
   const canNavigateBatchResults = currentBatchIndex >= 0 && navigationItems.length > 1;
+  const storedReviewCallbacks = batchResults.length > 0 && batchResults.every((item) => !!item.batchId)
+    ? { onPick: pickBatchResult, onEdit: editBatchResult, onReject: rejectBatch }
+    : undefined;
+  const activeReviewCallbacks = reviewCallbacks ?? storedReviewCallbacks;
+  const [feedbackRequest, setFeedbackRequest] = useState<FeedbackModalRequest | null>(null);
 
   const stageRef = useRef<Konva.Stage | null>(null);
   const roRef = useRef<ResizeObserver | null>(null);
@@ -488,6 +500,12 @@ export function AndroidCanvasStage() {
           showClose={!showingLiveBatchGrid}
           title={showingLiveBatchGrid ? `当前并发预览 · ${runningJobs.length} 路 · ${jobsCompleted}/${jobsTotal}` : undefined}
           livePreview={showingLiveBatchGrid}
+          onPick={activeReviewCallbacks?.onPick}
+          onEdit={activeReviewCallbacks?.onEdit ? (item) => setFeedbackRequest({ kind: "edit", item, items: [...orderedBatchResults] }) : undefined}
+          onRejectAll={activeReviewCallbacks?.onReject ? (items) => setFeedbackRequest({ kind: "reject", items }) : undefined}
+          criticRunning={tasteCriticRunning}
+          criticError={tasteCriticBatchId === orderedBatchResults[0]?.batchId ? tasteCriticError : null}
+          onRunCritic={() => reviewBatchWithTasteCritic({ items: orderedBatchResults })}
         />
       ) : null}
       {!showingResultGrid && currentImage && compareB ? (
@@ -622,6 +640,20 @@ export function AndroidCanvasStage() {
         <div className="stream-preview-overlay">
           <StreamPreviewBadge compact />
         </div>
+      ) : null}
+      {feedbackRequest ? (
+        <FeedbackModal
+          request={feedbackRequest}
+          onClose={() => setFeedbackRequest(null)}
+          onSubmit={async (note) => {
+            if (feedbackRequest.kind === "edit") {
+              await activeReviewCallbacks?.onEdit?.({ item: feedbackRequest.item, items: feedbackRequest.items, note });
+            } else {
+              await activeReviewCallbacks?.onReject?.({ items: feedbackRequest.items, note });
+            }
+            setFeedbackRequest(null);
+          }}
+        />
       ) : null}
     </div>
   );

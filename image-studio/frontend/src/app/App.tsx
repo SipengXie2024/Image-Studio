@@ -16,6 +16,7 @@ import { StarPromptGate } from "./gates/StarPromptGate";
 import { AppUpdateGate } from "./gates/AppUpdateGate";
 import { PromptImportGate } from "./gates/PromptImportGate";
 import { UpstreamConfigGate } from "./gates/UpstreamConfigGate";
+import { TasteBootstrapGate } from "./gates/TasteBootstrapGate";
 import { useAndroidView } from "./hooks/useAndroidView";
 import { useDesktopPromptImport } from "./hooks/useDesktopPromptImport";
 import { useGlobalImageImport } from "./hooks/useGlobalImageImport";
@@ -56,6 +57,7 @@ export default function App() {
       <UpstreamConfigGate />
       <SettingsPanelGate open={settingsOpen} onClose={closeSettings} />
       <HistoryTimelineModal />
+      <TasteBootstrapGate />
       <ResultDetailGate />
       <SavePromptGate />
       <StarPromptGate />
