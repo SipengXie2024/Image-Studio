@@ -9,7 +9,7 @@
 1. **用户 prompt 默认逐字提交**。`assertPromptByteIdentity()` 防线不许删、不许放宽;显式用户操作改变提交内容时必须记录 `promptProvenance: "user-controls"`。
 2. **只从显式 pick / edit / reject 学习**。浏览、保留、删除图片都不是偏好证据。
 3. **长期规则只进 critic 评审与需用户确认的参谋草稿**(suggest 辅助重试、主「AI 优化提示词」),refine-note 不注入;规则永远不直接拼进提交给生图模型的 prompt。`TasteCandidate.target` 锁死为 `critic`。
-4. **品味数据表全部 append-only**:`feedbackEvents`、`candidateDecisions`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals`。改决定就追加新记录,不原地改、不删除。
+4. **品味数据表全部 append-only**:`feedbackEvents`、`candidateDecisions`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals`、`ruleCurationProposals`。改决定就追加新记录,不原地改、不删除。规则库 curation(merge/retire 提案)必须经显式弹窗逐条决定,采纳 = 追加 approve/reject 决定记录;禁止任何后台静默改写生效规则。
 5. **DQ 是确定性硬门**:模型只报告可见事实,客户端裁决;DQ 图仍允许用户查看并显式选定。
 6. **双端语义一致**:桌面 Wails 与 Android/remote kernel 行为不得分叉;`shared/kernel/requestModel.js` 与 `image-studio/backend/prompt_optimize.go` 的 instruction 必须逐字一致,由 `frontend/test/promptModeParity.test.mjs` 守卫——**instruction 文本里不能出现双引号**(守卫用 Go 正则 `"([^"]*)"` 提取,会被截断)。
 7. **不删除、skip 或弱化测试来制造全绿**。既有失败基线(runtimeHost 4 项、backend cleanup-dirs 1 项)与新增失败必须如实区分。

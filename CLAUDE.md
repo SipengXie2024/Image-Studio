@@ -53,7 +53,8 @@
 
 ### 2.5 feedback 与 decision 是 append-only
 
-- `feedbackEvents`、`candidateDecisions`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals` 使用新增记录表达事实与后续决定，不覆盖旧事件。
+- `feedbackEvents`、`candidateDecisions`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals`、`ruleCurationProposals` 使用新增记录表达事实与后续决定，不覆盖旧事件。
+- 规则库 curation（merge/retire 提案）不例外：采纳 merge = 追加新规则 approve + 被替代规则各一条 reject（先 approve 后 reject，宁可短暂重叠不可出现缺口）；被替代规则进入「已忽略」留档、可恢复，绝不物理删除。每条提案必须经显式弹窗逐条决定，禁止任何后台静默改写生效规则。
 - 更改决定时追加新的 decision，以最新一条作为当前状态；不要原地修改或删除旧决定。
 - 写 feedback 时同时保存可用的视觉判例资源，避免只剩容易失效的 history 引用。
 - 测试不能污染真实用户数据；不要为了修测试清空 IndexedDB。
@@ -87,14 +88,18 @@ edit 轮默认继承源图的 hard gate；只有编辑建议明确要求新增�
 - `78ed2d7`：Images API 流式响应没有最终图片时，自动改用非流式 `b64_json` 兼容模式重试一次；显式 error/failed 事件保留真实原因。frontend remote kernel 与 Go client 行为一致。
 - `1327e34`：品味闭环开发交接文档。
 
-**工作区另有大量未提交改动（2026-08-14 迭代，均已通过全量验证与 EXE 冒烟）**，主要包括：
+**2026-08-14 迭代已作为 `4fffb56`（feat）与 `94d9f80`（docs）提交并推送**，主要包括：
 
 - reject → harness 辅助重试闭环：suggest mode 起草改进 prompt → 对照弹窗确认/编辑/拒绝 → 采纳续跑；决定入 `promptSuggestionDecisions` 表；`submit()` 支持 `{promptProvenance, disableLoop}` options。
 - 规则蒸馏三通道（distill-rule / 手动编辑 / revise-rule）、edit 弹窗「让 harness 优化」（refine-note）、删除预设风格 chips。
 - 品味面板 TastePanel（候选记录/生效规则/反馈判例/建议采纳史 四 tab；FooterBar「学习经验」常驻入口）与建议效果统计（`suggestionOutcomes` 表）。
-- 「从历史学习」：induce-rules mode 让 AI 从判例与建议史归纳规则候选，落 append-only `inducedRuleProposals` 表（IndexedDB v5），候选 id 按规则文本 hash 去重。
+- 「从历史学习」：induce-rules mode 让 AI 从判例与建议史归纳规则候选，落 append-only `inducedRuleProposals` 表，候选 id 按规则文本 hash 去重。
 - 已批准规则注入 suggest 与主「AI 优化提示词」两条参谋通道（见契约 2.4）；default/edit/suggest 及全部文本 mode 的 instruction 有双端字节一致守卫（`test/promptModeParity.test.mjs`；**新增 instruction 不得含双引号**，否则 Go 侧正则提取会截断）。
 - 历史右键「重新进入批次评审」；`HistoryItem.sourcePaths` 写入修复（此前只读不写）；批次评审按钮实体化；品味 UI 一律用 unlayered 手写类（`styles/_taste.css`，Windows WebView 下部分 tailwind layered utilities 不渲染）。
+
+**工作区另有未提交的 V8 改动（2026-08-14，规则库 curation）**：
+
+- 规则库 curation（curate-rules mode，IndexedDB v6 新表 `ruleCurationProposals`）：生效规则页显示 N/12 预算（`RULE_BUDGET`，≥80% 出提示条）、「整理规则库」按钮让 AI 提议 merge/retire；提案文本经 `canonicalRuleText` 匹配回 approved 候选（引用对不上的整条丢弃），全部进 `RuleCurationModal` 显式弹窗逐条采纳/忽略；决定复用 `decideTasteCandidate`（approve curated 时自动 reject 被替代规则，先 approve 后 reject）；已拒绝过的合并文本不复活；「稍后再说」时 merge 提案留在候选记录、retire 提案此次失效。
 
 接手时先运行 `git status --short --branch` 和 `git log -7 --oneline`，以仓库实际状态为准。
 
@@ -105,7 +110,7 @@ edit 轮默认继承源图的 hard gate；只有编辑建议明确要求新增�
 ### 品味闭环
 
 - `image-studio/frontend/src/lib/tasteStorage.ts`
-  - `image-studio-taste` IndexedDB（v5）；`feedbackEvents`、`candidateDecisions`、`documents`、`visualExemplars`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals`。
+  - `image-studio-taste` IndexedDB（v6）；`feedbackEvents`、`candidateDecisions`、`documents`、`visualExemplars`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals`、`ruleCurationProposals`。
 - `image-studio/frontend/src/lib/tasteLearning.ts`
   - prompt 字节一致性、旧历史弱候选、显式反馈候选、批准后的 critic rules snapshot。
 - `image-studio/frontend/src/lib/tasteCritic.ts`
@@ -237,6 +242,7 @@ node --test `
   test/tasteInsights.test.mjs `
   test/promptSuggestion.test.mjs `
   test/ruleInduction.test.mjs `
+  test/ruleCuration.test.mjs `
   test/promptModeParity.test.mjs `
   test/requestModel.test.mjs `
   test/remoteKernel.test.mjs
@@ -277,7 +283,7 @@ go test ./...
 
 ## 9. 下一步优先级
 
-1. 用最新 EXE 做真实上游 smoke：辅助重试草稿弹窗的规则计数小字、主「AI 优化提示词」的规则注入与 toast 计数、「从历史学习」的归纳质量、edit 自动续跑与编辑批次的 DQ/补抽；记录结果但不要提交用户图片或 raw response。
+1. 用最新 EXE 做真实上游 smoke：辅助重试草稿弹窗的规则计数小字、主「AI 优化提示词」的规则注入与 toast 计数、「从历史学习」的归纳质量、「整理规则库」按钮 → curation 弹窗逐条决定 → 生效规则页的替换效果与预算 banner、edit 自动续跑与编辑批次的 DQ/补抽；记录结果但不要提交用户图片或 raw response。
 2. 验证失败事务：source 准备失败不写 feedback；feedback 已写但 submit 失败时不重复记录；多次点击确认不能产生重复事件或重复 job。
 3. 用真实最近一批数据检查“视觉判例确实作为图片附件进入 critic”，而不是只保存了 metadata；补充可观察的诊断信息但不要泄露图片或 key。
 4. 校准 DQ 假阳性/假阴性，特别是“增加对手/另一个视图”的中英文表达；坚持“模型报告事实，客户端决定 DQ”。
