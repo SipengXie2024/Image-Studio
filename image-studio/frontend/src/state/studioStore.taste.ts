@@ -1,9 +1,14 @@
-import { extractColdStartTasteCandidates, feedbackEventToTasteCandidate } from "../lib/tasteLearning.ts";
+import {
+  extractColdStartTasteCandidates,
+  feedbackEventToTasteCandidate,
+  inducedProposalToTasteCandidate,
+} from "../lib/tasteLearning.ts";
 import {
   appendTasteDecision,
   appendTasteFeedback,
   listTasteDecisions,
   listTasteFeedback,
+  listTasteInducedRuleProposals,
   readTasteProfile,
   readTasteState,
   writeTasteProfile,
@@ -14,6 +19,7 @@ import { loadAllHistory } from "../lib/storage.ts";
 import { readRuntimePlatformState } from "../platform/index.ts";
 import { ReadImageAsBase64 } from "../platform/runtime/host.ts";
 import type {
+  InducedRuleProposal,
   TasteCandidateDecision,
   TasteFeedbackEvent,
   TasteFeedbackInput,
@@ -41,6 +47,7 @@ type TasteActionDependencies = {
     createdAt?: number;
   }) => Promise<TasteCandidateDecision>;
   listDecisions: (candidateId?: string) => Promise<TasteCandidateDecision[]>;
+  listInducedProposals: () => Promise<InducedRuleProposal[]>;
   readProfile: () => Promise<TasteProfileState | null>;
   writeProfile: (profile: TasteProfileState) => Promise<void>;
   readBootstrapState: () => Promise<TasteBootstrapState | null>;
@@ -57,6 +64,7 @@ const defaultDependencies: TasteActionDependencies = {
   listFeedback: listTasteFeedback,
   appendDecision: appendTasteDecision,
   listDecisions: listTasteDecisions,
+  listInducedProposals: listTasteInducedRuleProposals,
   readProfile: () => readTasteProfile<TasteProfileState>(),
   writeProfile: writeTasteProfile,
   readBootstrapState: () => readTasteState<TasteBootstrapState>(),
@@ -95,15 +103,22 @@ function latestDecisionByCandidate(
 }
 
 async function collectTasteProfile(dependencies: TasteActionDependencies): Promise<TasteProfileState> {
-  const [history, feedback, decisions, savedProfile] = await Promise.all([
+  const [history, feedback, decisions, inducedProposals, savedProfile] = await Promise.all([
     dependencies.loadHistory(),
     dependencies.listFeedback(),
     dependencies.listDecisions(),
+    dependencies.listInducedProposals(),
     dependencies.readProfile(),
   ]);
   const byId = new Map(extractColdStartTasteCandidates(history).map((candidate) => [candidate.id, candidate]));
   for (const event of feedback) {
     const candidate = candidateFromStoredFeedback(event);
+    if (candidate) byId.set(candidate.id, candidate);
+  }
+  // AI-induced proposals are a fact table of their own, so pending induced
+  // candidates survive this rebuild until the user decides on them.
+  for (const proposal of inducedProposals) {
+    const candidate = inducedProposalToTasteCandidate(proposal);
     if (candidate) byId.set(candidate.id, candidate);
   }
   const latest = latestDecisionByCandidate(decisions);
@@ -114,16 +129,23 @@ async function collectTasteProfile(dependencies: TasteActionDependencies): Promi
     }
   }
   const candidates = Array.from(byId.values())
-    .map((candidate) => ({
-      ...candidate,
-      status: latest.get(candidate.id)?.decision === "approve"
-        ? "approved" as const
-        : latest.get(candidate.id)?.decision === "reject"
-          ? "rejected" as const
-          : savedById.get(candidate.id)?.status === "approved"
-            ? "approved" as const
-            : "pending" as const,
-    }))
+    .map((candidate) => {
+      const saved = savedById.get(candidate.id);
+      // A polished rule (AI-distilled or hand-edited) must survive the rebuild
+      // from raw feedback; otherwise refresh would silently restore the template.
+      const preservedRule = saved?.refined ? { rule: saved.rule, refined: saved.refined } : {};
+      return {
+        ...candidate,
+        ...preservedRule,
+        status: latest.get(candidate.id)?.decision === "approve"
+          ? "approved" as const
+          : latest.get(candidate.id)?.decision === "reject"
+            ? "rejected" as const
+            : saved?.status === "approved"
+              ? "approved" as const
+              : "pending" as const,
+      };
+    })
     .sort((left, right) => left.id.localeCompare(right.id));
   return {
     schemaVersion: 1,
@@ -273,6 +295,12 @@ export function createTasteActions(
       }
     },
 
+    // Rebuilds the profile from the fact tables without opening the bootstrap
+    // modal; used after new facts (e.g. induced proposals) are appended.
+    async refreshTasteProfile() {
+      await refresh();
+    },
+
     async decideTasteCandidate(candidateId: string, decision: "approve" | "reject") {
       const existing = await dependencies.listDecisions(candidateId);
       const latestCreatedAt = existing.reduce((latest, entry) => Math.max(latest, entry.createdAt), -1);
@@ -317,10 +345,15 @@ export function createTasteActions(
       }
     },
 
-    async editBatchResult(input: { item: HistoryItem; items: HistoryItem[]; note: string }) {
+    async editBatchResult(input: { item: HistoryItem; items: HistoryItem[]; note: string; keepSourcePaths?: readonly string[] }) {
       const state = store.getState();
       assertCurrentFeedbackBatch(input.items, state.batchResults);
       const context = feedbackContext(input.item, input.items);
+      // Only reference images the batch was actually generated with may carry
+      // over; anything else would smuggle unrelated sources into the rerun.
+      const batchSourcePaths = new Set(input.item.sourcePaths ?? []);
+      const keptPaths = Array.from(new Set(input.keepSourcePaths ?? []))
+        .filter((path) => path.trim() && batchSourcePaths.has(path) && path !== input.item.savedPath);
       await state.reuseAsSource(input.item);
       const prepared = store.getState();
       const selectedPath = prepared.currentImage?.savedPath;
@@ -331,7 +364,11 @@ export function createTasteActions(
         throw new Error("源图准备失败，请重试后再提交建议");
       }
       assertCurrentFeedbackBatch(input.items, prepared.batchResults);
-      store.setState({ prompt: input.note, sources: [selectedSource] });
+      const keptSources = keptPaths.map((path) => (
+        prepared.sources.find((source) => source.path === path)
+        ?? { path, name: path.split(/[\\/]/).pop() || "source.png", size: 0 }
+      ));
+      store.setState({ prompt: input.note, sources: [selectedSource, ...keptSources] });
       const visualExemplars = await captureVisualExemplars([input.item], dependencies);
       assertCurrentFeedbackBatch(input.items, store.getState().batchResults);
       await dependencies.appendFeedback({
@@ -339,6 +376,7 @@ export function createTasteActions(
         type: "edit",
         itemId: input.item.id,
         note: input.note,
+        attachedSourcePaths: keptPaths.length > 0 ? keptPaths : undefined,
         visualExemplars,
       });
       const refreshed = await refreshAfterFeedback(state);
@@ -379,6 +417,18 @@ export function createTasteActions(
       assertCurrentFeedbackBatch(input.items, store.getState().batchResults);
       state.closeResultGrid();
       await dependencies.appendFeedback({ ...context, type: "reject", note: input.note, visualExemplars });
+      const representative = input.items[0];
+      store.setState({
+        promptRetryOffer: {
+          batchId: context.batchId,
+          originalPrompt: context.originalPrompt,
+          submittedPrompt: context.submittedPrompt,
+          rejectNote: input.note,
+          mode: representative.mode === "edit" ? "edit" : "generate",
+          sourcePaths: [...(representative.sourcePaths ?? [])],
+          createdAt: dependencies.now(),
+        },
+      });
       if (await refreshAfterFeedback(state)) {
         state.pushToast(input.note.trim() ? "已记录全否原因" : "已记录本批全部不满意", "success", 6000,
           input.note.trim()

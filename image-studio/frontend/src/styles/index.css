@@ -1066,6 +1066,7 @@ html[data-ui-family="apple"] .select:focus {
 @import "./_apple-overflow.css";
 @import "./_panel.css";
 @import "./_canvas.css";
+@import "./_taste.css";
 @import "./_history.css";
 @import "./_overlays.css";
 @import "./fluent/_windows-theme.css";

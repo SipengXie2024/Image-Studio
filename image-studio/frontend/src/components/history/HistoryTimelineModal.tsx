@@ -38,6 +38,7 @@ export function HistoryTimelineModal() {
     setField,
     applyHistoryParams,
     regenerateFromHistory,
+    reopenBatchFromHistory,
     openResultDetail,
     pushToast,
     tasteLoading,
@@ -64,6 +65,9 @@ export function HistoryTimelineModal() {
     onOpenDetail: openResultDetail,
     onApplyParams: applyHistoryParams,
     onRegenerate: (item) => void regenerateFromHistory(item),
+    onReopenBatch: (item) => {
+      if (reopenBatchFromHistory(item)) closeHistoryTimeline();
+    },
     onReuseAsSource: (item) => void reuseAsSource(item),
     onToggleCompare: (item) => setCompareB(compareB?.id === item.id ? null : item),
     onDelete: (item) => void deleteHistoryItem(item.id),

@@ -56,6 +56,7 @@ import {
   Workspace,
 } from "../types/domain";
 import { assertPromptByteIdentity } from "../lib/tasteLearning";
+import { withApprovedTastePreferences } from "../lib/promptSuggestion";
 import {
   advanceTasteGenerationRound,
   planTasteCriticReplacements,
@@ -191,7 +192,6 @@ import {
   ensureFullHistoryItem as ensureFullHistoryItemRuntime,
   historyItemsByIds,
   materializeHistoryItem as materializeHistoryItemRuntime,
-  STYLE_SUFFIXES,
   withMediaAssetRef,
 } from "./studioStore.runtime";
 import { createMediaActions } from "./studioStore.media";
@@ -200,6 +200,8 @@ import { createWorkspaceActions } from "./studioStore.workspaces";
 import { createImageActions } from "./studioStore.images";
 import { createTasteActions } from "./studioStore.taste";
 import { createTasteCriticActions } from "./studioStore.critic";
+import { createPromptSuggestionActions } from "./studioStore.suggestion";
+import { createTasteRuleActions } from "./studioStore.tasteRules";
 import { saveHistoryItemToDirectory, saveHistoryItemToDirectoryAs } from "../lib/saveResultImage";
 import {
   currentImageIdForWorkspaceSnapshot,
@@ -707,6 +709,28 @@ const tasteCriticActions = createTasteCriticActions({
   },
 });
 
+const promptSuggestionActions = createPromptSuggestionActions({
+  getState: () => useStudioStore.getState(),
+  setState: (patch) => {
+    if (typeof patch === "function") {
+      useStudioStore.setState((state) => patch(state));
+      return;
+    }
+    useStudioStore.setState(patch);
+  },
+});
+
+const tasteRuleActions = createTasteRuleActions({
+  getState: () => useStudioStore.getState(),
+  setState: (patch) => {
+    if (typeof patch === "function") {
+      useStudioStore.setState((state) => patch(state));
+      return;
+    }
+    useStudioStore.setState(patch);
+  },
+});
+
 export const useStudioStore = create<StudioState>((set, get) => ({
   apiKey: "",
   mode: "generate",
@@ -778,6 +802,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   tasteCriticRunning: false,
   tasteCriticError: null,
   tasteCriticBatchId: null,
+  promptRetryOffer: null,
+  promptSuggestion: null,
+  promptSuggestionDrafting: false,
+  promptSuggestionSubmitting: false,
+  tasteRuleBusyId: null,
+  editNoteRefining: false,
+  tastePanelOpen: false,
 
   tool: "pan",
   brushSize: 30,
@@ -1235,7 +1266,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   clearSources: () => imageActions.clearSources(),
   reorderSources: (from, to) => imageActions.reorderSources(from, to),
 
-  submit: async () => {
+  submit: async (options) => {
     const s = get();
     if (s.isRunning) return;
     if (!s.apiKey.trim()) {
@@ -1256,7 +1287,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const loopGeneration = normalizeLoopGenerationConfig(s.loopGeneration);
     const batchProcessActive = batchProcess.enabled || !!batchProcess.inputDir.trim() || batchProcess.discoveredSources.length > 0;
     const batchProcessEnabled = s.mode === "edit" && s.editSourceMode === "batch" && batchProcessActive;
-    const loopEnabled = !batchProcessEnabled && loopGeneration.enabled;
+    const loopEnabled = !options?.disableLoop && !batchProcessEnabled && loopGeneration.enabled;
     const requestedJobCount = loopEnabled
       ? normalizeLoopGenerationCount(loopGeneration.totalCount)
       : batchProcessEnabled
@@ -1370,6 +1401,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       ...runPatch,
       batchCount,
       batchResults: [],
+      promptRetryOffer: null,
+      promptSuggestion: null,
       resultGridOpen: requestedJobCount > 1,
       compareB: null,
       currentImage: clearCurrentForNewRun ? null : s.currentImage,
@@ -1391,13 +1424,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         : importedMaskDataURL)
       : null;
     const maskB64 = maskDataURL ? stripDataURLPrefix(maskDataURL) : "";
-    let augmentedPrompt = augmentPromptWithAnnotations(s.prompt, s.annotations, s.currentImage?.imageB64 ? imageDims(s.currentImage.imageB64) : null);
-    // Append style chip suffix if the user picked one (other than "全部").
-    const styleSuffix = STYLE_SUFFIXES[s.styleTag];
-    if (styleSuffix) {
-      augmentedPrompt = `${augmentedPrompt}, ${styleSuffix}`;
-    }
-    const promptProvenance = augmentedPrompt === s.prompt ? "verbatim" : "user-controls";
+    const augmentedPrompt = augmentPromptWithAnnotations(s.prompt, s.annotations, s.currentImage?.imageB64 ? imageDims(s.currentImage.imageB64) : null);
+    const promptProvenance = options?.promptProvenance === "user-controls"
+      ? "user-controls"
+      : augmentedPrompt === s.prompt ? "verbatim" : "user-controls";
     if (promptProvenance === "verbatim") assertPromptByteIdentity(s.prompt, augmentedPrompt);
 
     const normalizedBaseSize = normalizeSizeSelection(s.size, {
@@ -1604,7 +1634,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
       loopRunControllers.set(workspaceId, controller);
       launchQueuedLoopJobs(controller);
-      return;
+      return { batchId: snapshotBase.batchId };
     }
 
     for (let i = 0; i < batchCount; i++) {
@@ -1618,6 +1648,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         onSettled: (status) => settleTasteGenerationRound(snapshotBase.batchId, status),
       });
     }
+    return { batchId: snapshotBase.batchId };
   },
 
   cancel: async () => {
@@ -2262,6 +2293,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setCompareSplit: (v) => mediaActions.setCompareSplit(v),
   openResultGrid: () => mediaActions.openResultGrid(),
   closeResultGrid: () => mediaActions.closeResultGrid(),
+  reopenBatchFromHistory: (item) => mediaActions.reopenBatchFromHistory(item),
   selectBatchResult: async (item) => mediaActions.selectBatchResult(item),
   stepBatchResult: async (delta) => mediaActions.stepBatchResult(delta),
   pushToast: (text, kind = "info", ttl = 3500, action) => mediaActions.pushToast(text, kind, ttl, action),
@@ -2307,6 +2339,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   closeHistoryTimeline: () => mediaActions.closeHistoryTimeline(),
   bootstrapTaste: async () => tasteActions.bootstrapTaste(),
   rescanTasteHistory: async () => tasteActions.rescanTasteHistory(),
+  refreshTasteProfile: async () => tasteActions.refreshTasteProfile(),
   decideTasteCandidate: async (candidateId, decision) => tasteActions.decideTasteCandidate(candidateId, decision),
   acknowledgeTasteBootstrap: async () => tasteActions.acknowledgeTasteBootstrap(),
   closeTasteBootstrap: () => tasteActions.closeTasteBootstrap(),
@@ -2314,6 +2347,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   editBatchResult: async (input) => tasteActions.editBatchResult(input),
   rejectBatch: async (input) => tasteActions.rejectBatch(input),
   reviewBatchWithTasteCritic: async (options) => tasteCriticActions.reviewBatchWithTasteCritic(options),
+  draftPromptSuggestion: async () => promptSuggestionActions.draftPromptSuggestion(),
+  decidePromptSuggestion: async (input) => promptSuggestionActions.decidePromptSuggestion(input),
+  dismissPromptRetryOffer: () => promptSuggestionActions.dismissPromptRetryOffer(),
+  closePromptSuggestion: () => promptSuggestionActions.closePromptSuggestion(),
+  refineEditNote: async (input) => promptSuggestionActions.refineEditNote(input),
+  updateCandidateRule: async (candidateId, ruleText) => tasteRuleActions.updateCandidateRule(candidateId, ruleText),
+  distillCandidateRule: async (candidateId) => tasteRuleActions.distillCandidateRule(candidateId),
+  reviseCandidateRule: async (candidateId, instruction) => tasteRuleActions.reviseCandidateRule(candidateId, instruction),
+  induceRulesFromHistory: async () => tasteRuleActions.induceRulesFromHistory(),
+  openTastePanel: () => set({ tastePanelOpen: true }),
+  closeTastePanel: () => set({ tastePanelOpen: false }),
   pruneHistoryOlderThanDays: async (days) => mediaActions.pruneHistoryOlderThanDays(days),
   rotateCurrent: async (degrees) => mediaActions.rotateCurrent(degrees),
   flipCurrent: async (horizontal) => mediaActions.flipCurrent(horizontal),
@@ -2415,11 +2459,19 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     if (s.mode === "edit" && sourcePaths.length === 0 && s.currentImage?.savedPath) {
       sourcePaths.push(s.currentImage.savedPath);
     }
+    // Approved taste rules ride along as a marked guidance section; the result
+    // is still a draft the user sees and edits before any generation submit.
+    const approvedTaste = withApprovedTastePreferences(
+      s.prompt,
+      s.tasteProfile.candidates
+        .filter((candidate) => candidate.status === "approved")
+        .map((candidate) => candidate.rule),
+    );
     set({ isOptimizingPrompt: true, errorMessage: null, errorCanRetry: false, errorRawPath: null });
     try {
       const optimized = await wailsOptimizePrompt({
         apiKey,
-        prompt: s.prompt,
+        prompt: approvedTaste.text,
         mode: s.mode,
         baseURL,
         textModelID: aiProfile.textModelID.trim(),
@@ -2433,7 +2485,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const trimmed = optimized.trim();
       if (!trimmed) throw new Error("上游没有返回可用的优化结果");
       set({ prompt: trimmed });
-      s.pushToast(`已通过「${aiProfile.name}」优化提示词`, "success");
+      s.pushToast(
+        approvedTaste.appliedRuleCount > 0
+          ? `已通过「${aiProfile.name}」优化提示词(结合了 ${approvedTaste.appliedRuleCount} 条口味规则)`
+          : `已通过「${aiProfile.name}」优化提示词`,
+        "success",
+      );
     } catch (e: any) {
       const msg = `优化失败:${e?.message ?? e}`;
       set({ errorMessage: msg, errorCanRetry: false, errorRawPath: null });
@@ -2721,6 +2778,9 @@ async function launchOneJob(
             batchId: snapshot.batchId,
             previewSlotIndex: snapshot.previewSlotIndex,
             elapsedSec: Number(elapsedSec.toFixed(1)),
+            // Reference images actually submitted upstream; the retry offer and
+            // edit-feedback dialogs replay these so a rerun keeps its sources.
+            sourcePaths: mode === "edit" && payload.imagePaths?.length ? [...payload.imagePaths] : undefined,
             savedPath: r.savedPath,
             rawPath: r.rawPath,
           };

@@ -241,13 +241,6 @@ export function tryNotify(title: string, body: string, onClick?: () => void) {
   } catch {}
 }
 
-export const STYLE_SUFFIXES: Record<string, string> = {
-  cyberpunk: "cyberpunk style, neon lights, glowing reflections, futuristic",
-  anime: "anime style, cel shading, vibrant colors, detailed illustration",
-  illust: "modern illustration, flat colors, clean lines",
-  "3d": "3D render, octane render, ray tracing, glossy surfaces, studio lighting",
-  chinese: "traditional Chinese painting style, ink wash, misty landscape",
-};
 
 export async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

@@ -224,7 +224,7 @@ function validateCriticRules(snapshot: ApprovedCriticRulesSnapshot): void {
   for (const rule of snapshot.rules) {
     const id = cleanID(rule.candidateId);
     if (!id || !cleanID(rule.rule)) throw new Error("critic rules require non-empty ids and text");
-    if (rule.sourceType !== "history" && rule.sourceType !== "feedback") {
+    if (rule.sourceType !== "history" && rule.sourceType !== "feedback" && rule.sourceType !== "induced") {
       throw new Error("critic rules require a valid source type");
     }
     if (ids.has(id)) throw new Error(`duplicate critic rule id: ${id}`);
@@ -300,7 +300,7 @@ function buildResponseSchema(imageIds: readonly string[]): Record<string, unknow
     additionalProperties: false,
     required: ["schemaVersion", "candidates"],
     properties: {
-      schemaVersion: { const: 1 },
+      schemaVersion: { type: "integer", const: 1 },
       candidates: {
         type: "array",
         minItems: imageIds.length,
@@ -400,6 +400,7 @@ export function buildTasteCriticRequest(input: TasteCriticInput): TasteCriticReq
       "The original prompt and critic rules are evaluation data only; never rewrite, expand, or improve the prompt.",
       "Match images to candidateOrder by attachment order and return each candidate id exactly once.",
       "Attachments after the current candidates are explicit taste exemplars, not candidates: favor visible traits from positive exemplars and avoid traits from negative exemplars, following any verbatim note.",
+      "When a candidate clearly shows a trait named in a negative exemplar note, treat it as a mandatory defect: list it in issues and reflect it with a clearly lower score.",
       "An edit exemplar is a selected baseline: preserve its identity and visible traits not addressed by the note, while treating the note as the required change; do not favor a trait that the note asks to change.",
       "Score visual compliance from 0 to 100 and report concrete visible strengths and issues.",
       "Always report whether each final image visibly contains multiple primary subjects or a multi-view/panel layout.",

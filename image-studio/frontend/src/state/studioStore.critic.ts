@@ -5,8 +5,7 @@ import {
 } from "../platform/runtime/host.ts";
 import { readRuntimePlatformState } from "../platform/index.ts";
 import { detectImageMimeTypeFromBase64 } from "../lib/images.ts";
-import { keyringUserFor, pickAIProfile } from "../lib/profiles.ts";
-import { cleanBaseURL } from "../lib/security.ts";
+import { aiChannelFailureMessage, resolveAIChannel } from "../lib/aiChannel.ts";
 import { persistHistoryItems } from "../lib/storage.ts";
 import {
   buildTasteCriticRequest,
@@ -160,18 +159,18 @@ export function createTasteCriticActions(
         return configurationFailure(store, "候选图片的原始提示词不一致", silent);
       }
 
-      const aiProfile = pickAIProfile(initial.profiles, initial.aiProfileId, initial.activeProfileId);
-      if (!aiProfile) return configurationFailure(store, "未配置可用于 AI 评审的 Responses 渠道", silent);
-      if (aiProfile.allowInsecureConnection && initial.kernelRuntimeMode === "remote" && !dependencies.isAndroid()) {
-        return configurationFailure(store, "允许不安全连接的 AI 渠道需要桌面本地内核", silent);
+      const resolution = await resolveAIChannel({
+        profiles: initial.profiles,
+        aiProfileId: initial.aiProfileId,
+        activeProfileId: initial.activeProfileId,
+        kernelRuntimeMode: initial.kernelRuntimeMode,
+        isAndroid: dependencies.isAndroid,
+        getStoredAPIKey: dependencies.getStoredAPIKey,
+      });
+      if (!resolution.ok) {
+        return configurationFailure(store, aiChannelFailureMessage("AI 评审", resolution.failure), silent);
       }
-      const baseURL = cleanBaseURL(aiProfile.baseURL);
-      const textModelID = aiProfile.textModelID.trim();
-      if (!baseURL || !textModelID) {
-        return configurationFailure(store, `AI 渠道「${aiProfile.name}」配置不完整`, silent);
-      }
-      const apiKey = (await dependencies.getStoredAPIKey(keyringUserFor(aiProfile.id)).catch(() => "")).trim();
-      if (!apiKey) return configurationFailure(store, `AI 渠道「${aiProfile.name}」缺少 API Key`, silent);
+      const { aiProfile, baseURL, textModelID, apiKey } = resolution.channel;
 
       store.setState({
         tasteCriticRunning: true,
@@ -244,6 +243,8 @@ export function createTasteCriticActions(
           reviews.set(candidate.id, {
             schemaVersion: 1,
             criticRulesVersion: request.criticRulesVersion,
+            appliedRuleCount: rules.rules.length,
+            appliedExemplarCount: preparedExemplars.length,
             reviewedAt,
             score: candidate.score,
             summary: candidate.summary,

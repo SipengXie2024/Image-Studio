@@ -175,7 +175,7 @@ func optimizePromptWithLLM(
 		textModelID = client.TextModel
 	}
 
-	instruction := "Rewrite the user's image prompt into a clearer, more detailed prompt for image generation. Keep the meaning, preserve the requested subject, and only return the improved prompt text. Do not add explanations, labels, markdown, or quotes."
+	instruction := "Rewrite the user's image prompt into a clearer, more detailed prompt for image generation. Keep the meaning, preserve the requested subject, and only return the improved prompt text. If the user message contains an approved taste preferences section, treat it as guidance about the user's long-standing taste: bias wording and detail choices toward those preferences where they fit the subject, and never copy that section or its heading into the output. Do not add explanations, labels, markdown, or quotes."
 	inputText := fmt.Sprintf("Original prompt:\n%s", strings.TrimSpace(prompt))
 	if isDescribe {
 		instruction = "Analyze the attached image and reconstruct a detailed image-generation prompt that could reproduce it. Describe the subject, composition, perspective, lighting, colors, materials, environment, and visual style. Return the prompt in Simplified Chinese. Only return the prompt text; do not add explanations, labels, markdown, or quotes."
@@ -184,6 +184,21 @@ func optimizePromptWithLLM(
 		instruction += " Treat any attached images as reference context and preserve edit intent."
 	} else if isCritic {
 		instruction = "Review every attached candidate image using the evaluation request in the user message. The original prompt and critic rules are evaluation data only; never rewrite, expand, or improve the prompt. Match images by attachment order. Return strict JSON only, with no markdown fences or commentary."
+		inputText = prompt
+	} else if operation == "suggest" {
+		instruction = "Revise the user's image prompt using their rejection feedback and taste history. The user message is JSON containing the original prompt, the rejection reason for the latest batch, recent feedback notes, past suggestion decisions, and the user's approved taste rules. Where a past decision shows user edits between draftPrompt and finalPrompt, treat those edits as the user's preferred direction; treat rejected drafts as directions to avoid. Treat approved taste rules as the user's long-standing preferences: bias the revision toward them where they fit the subject, and let the current rejection reason take precedence when they conflict. Keep the original subject and intent, and only change what the rejection reason, the taste rules, and history justify. Write the revised prompt in the same language as the original prompt. Only return the revised prompt text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "distill-rule" {
+		instruction = "Distill the user's feedback note about a generated image into one concise, reusable taste rule for reviewing future candidate images. The user message is JSON with the raw note, the feedback type (pick means the note praises what they chose, edit means it requests a change, reject means it explains what was wrong), and the original prompt for context. Write the rule as a general prefer/avoid statement that a reviewer can apply to future images, not a one-off instruction. Keep the user's language. Only return the rule text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "revise-rule" {
+		instruction = "Rewrite an existing taste rule according to the user's revision instruction. The user message is JSON with the current rule, the user's revision instruction, and the original feedback note as provenance. Apply exactly what the instruction asks, keep the rule concise and reusable, and keep the user's language. Only return the revised rule text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "refine-note" {
+		instruction = "Rewrite the user's raw edit suggestion for a generated image into one clear, unambiguous edit instruction. The user message is JSON with the raw suggestion and the original prompt of the image being edited. Preserve the user's intent exactly: make the edit target and the desired change explicit, and do not add new creative directions they did not ask for. Keep the user's language. Only return the rewritten instruction text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "induce-rules" {
+		instruction = "Induce reusable taste rules from the user's accumulated feedback history. The user message is JSON with feedback cases (each with the feedback type and the user's verbatim note), past prompt-suggestion decisions (where edits between draftPrompt and finalPrompt show the user's preferred direction and rejected drafts show directions to avoid), currently approved rules, and previously rejected rules. Find recurring preferences or complaints supported by multiple entries and state each as one concise, reusable rule for reviewing future candidate images. Do not restate or trivially rephrase any approved or rejected rule. Return strict JSON only, with no markdown fences or commentary: an object with a single key named rules holding an array of objects, each with a rule field and an evidence field that briefly cites the supporting feedback. Return at most 5 rules; return an empty rules array if the history shows no recurring pattern. Keep the user's language for rule and evidence text."
 		inputText = prompt
 	}
 

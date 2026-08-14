@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Check, Loader2, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Sparkles } from "lucide-react";
 import type { TasteCandidate } from "../../lib/tasteLearning";
 import { Modal } from "../common/Modal";
+import { TasteRuleCard, type TasteRuleActions } from "./TasteRuleCard";
 
 type TasteProfileView = {
   candidates: TasteCandidate[];
@@ -10,12 +11,16 @@ type TasteProfileView = {
 export function TasteBootstrapModal({
   profile,
   loading,
+  ruleBusyId,
+  ruleActions,
   onDecide,
   onAcknowledge,
   onClose,
 }: {
   profile: TasteProfileView;
   loading: boolean;
+  ruleBusyId: string | null;
+  ruleActions: Omit<TasteRuleActions, "onDecide">;
   onDecide: (candidateId: string, decision: "approve" | "reject") => Promise<void>;
   onAcknowledge: () => Promise<void>;
   onClose: () => void;
@@ -26,6 +31,7 @@ export function TasteBootstrapModal({
   const candidates = useMemo(
     () => profile.candidates.filter((candidate) => (
       candidate.source.type === "feedback"
+      || candidate.source.type === "induced"
       || candidate.source.signal === "style-tag"
       || candidate.source.signal === "negative-prompt"
     )),
@@ -34,7 +40,7 @@ export function TasteBootstrapModal({
   const approvedCount = candidates.filter((candidate) => candidate.status === "approved").length;
   const rejectedCount = candidates.filter((candidate) => candidate.status === "rejected").length;
   const pendingCount = candidates.length - approvedCount - rejectedCount;
-  const busy = loading || completing || busyCandidateId !== null;
+  const busy = loading || completing || busyCandidateId !== null || ruleBusyId !== null;
 
   async function decide(candidateId: string, decision: "approve" | "reject") {
     if (busy) return;
@@ -109,12 +115,13 @@ export function TasteBootstrapModal({
         ) : (
           <div className="space-y-3">
             {candidates.map((candidate) => (
-              <TasteCandidateCard
+              <TasteRuleCard
                 key={candidate.id}
                 candidate={candidate}
                 busy={busyCandidateId === candidate.id}
+                ruleBusy={ruleBusyId === candidate.id}
                 disabled={busy}
-                onDecide={decide}
+                actions={{ onDecide: decide, ...ruleActions }}
               />
             ))}
           </div>
@@ -150,57 +157,3 @@ export function TasteBootstrapModal({
   );
 }
 
-function TasteCandidateCard({
-  candidate,
-  busy,
-  disabled,
-  onDecide,
-}: {
-  candidate: TasteCandidate;
-  busy: boolean;
-  disabled: boolean;
-  onDecide: (candidateId: string, decision: "approve" | "reject") => Promise<void>;
-}) {
-  const source = candidate.source;
-  const sourceLabel = source.type === "history"
-    ? source.signal === "style-tag" ? "历史 · 风格标签" : "历史 · 明确排除项"
-    : "明确反馈";
-  const evidenceLabel = source.type === "history"
-    ? `${source.itemIds.length} 条历史证据 · 曾请求≠喜欢`
-    : "来自你主动提交的反馈";
-
-  return (
-    <article className="rounded-[16px] border border-black/[0.08] bg-[var(--surface)] p-4 dark:border-white/[0.08]">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)]">{sourceLabel}</span>
-        <span className="text-[11px] text-zinc-400 dark:text-zinc-500">{evidenceLabel}</span>
-      </div>
-      <p className="mt-3 text-sm font-medium leading-6 text-zinc-800 dark:text-zinc-100">{candidate.rule}</p>
-      {source.type === "feedback" && source.verbatimNote ? (
-        <p className="mt-2 whitespace-pre-wrap rounded-[10px] bg-black/[0.03] px-3 py-2 text-xs leading-5 text-zinc-500 dark:bg-white/[0.04] dark:text-zinc-300">
-          你的原话：{source.verbatimNote}
-        </p>
-      ) : null}
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => void onDecide(candidate.id, "reject")}
-          disabled={disabled || candidate.status === "rejected"}
-          className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-[9px] border px-3 text-xs font-medium disabled:cursor-not-allowed ${candidate.status === "rejected" ? "border-zinc-400/30 bg-zinc-500/10 text-zinc-500" : "border-black/[0.08] text-zinc-600 hover:bg-black/[0.04] dark:border-white/[0.08] dark:text-zinc-300 dark:hover:bg-white/[0.05]"}`}
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-          {candidate.status === "rejected" ? "已忽略" : "忽略"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void onDecide(candidate.id, "approve")}
-          disabled={disabled || candidate.status === "approved"}
-          className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-[9px] border px-3 text-xs font-medium disabled:cursor-not-allowed ${candidate.status === "approved" ? "border-[color:var(--accent)]/30 bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[color:var(--accent)]/25 text-[var(--accent)] hover:bg-[var(--accent-soft)]"}`}
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-          {candidate.status === "approved" ? "已采纳" : "采纳"}
-        </button>
-      </div>
-    </article>
-  );
-}

@@ -54,6 +54,17 @@ test("native prompt source fallback paths are ordered and deduplicated", async (
   assert.equal(isNativeFilePath("C:\\images\\a.png"), true);
 });
 
+test("native prompt sources resolve to an empty list for image-free requests", async () => {
+  assert.deepEqual(await prepareNativePromptImagePaths({
+    imagePaths: [],
+    imagePath: "",
+  }, {
+    importImageFromBase64: async () => {
+      throw new Error("should not import anything for an image-free request");
+    },
+  }), []);
+});
+
 test("native prompt sources reject attachments without a path or bytes", async () => {
   await assert.rejects(
     prepareNativePromptImagePaths({ sourceImages: [{ name: "missing.png" }] }, {
@@ -77,6 +88,31 @@ test("native prompt sources fall back to stored bytes when a file path is no lon
 
   assert.deepEqual(paths, ["C:\\imports\\liked.png"]);
   assert.deepEqual(imported, [{ imageB64: "ZmFsbGJhY2s=", suggestedName: "001-liked.png" }]);
+});
+
+test("dialog-picked files outside managed roots are forwarded verbatim when the probe rejects them", async () => {
+  // OpenImageDialog returns the original on-disk path with a preview only (no
+  // bytes); the ReadImageAsBase64 probe rejects paths outside managed roots.
+  // The host upload reader accepts them, so the path must pass through.
+  const paths = await prepareNativePromptImagePaths({
+    sourceImages: [
+      { path: "C:\\output\\images\\batch.png", name: "batch.png" },
+      { path: "C:\\Users\\me\\Desktop\\face.jpg", name: "face.jpg", previewUrl: "asset://preview/face" },
+    ],
+  }, {
+    readNativePathAsBase64: async (path) => {
+      if (path === "C:\\output\\images\\batch.png") return "b64";
+      throw new Error("拒绝访问应用托管目录之外的文件");
+    },
+    importImageFromBase64: async () => {
+      throw new Error("should not materialize dialog-picked native paths");
+    },
+  });
+
+  assert.deepEqual(paths, [
+    "C:\\output\\images\\batch.png",
+    "C:\\Users\\me\\Desktop\\face.jpg",
+  ]);
 });
 
 test("native prompt sources treat empty file reads as unreadable", async () => {

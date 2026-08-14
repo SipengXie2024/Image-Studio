@@ -1,6 +1,7 @@
 import type { APIMode, RequestPolicy, ReasoningEffortValue, ResponsesTransport, UpstreamProfile } from "../types/domain";
 import { buildUpstreamModelCatalog } from "./upstreamModels.ts";
 import { cleanBaseURL } from "./security.ts";
+import { stripWrappedCodeFence } from "./textCleanup.ts";
 
 export type UpstreamConfigExportProfile = {
   id: string;
@@ -116,11 +117,6 @@ function normalizeImportedBaseURL(value: unknown): string {
   return cleanBaseURL(trimmed).replace(/\/v1$/i, "");
 }
 
-function stripWrappedCodeFence(rawJSON: string): string {
-  const trimmed = rawJSON.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced ? fenced[1].trim() : trimmed;
-}
 
 function hostLabelFromBaseURL(baseURL: string): string {
   try {

@@ -1,10 +1,14 @@
 export const TASTE_DB_NAME = "image-studio-taste";
 
-const DB_VERSION = 2;
+const DB_VERSION = 5;
 const FEEDBACK_STORE = "feedbackEvents";
 const DECISION_STORE = "candidateDecisions";
 const DOCUMENT_STORE = "documents";
 const VISUAL_EXEMPLAR_STORE = "visualExemplars";
+const PROMPT_SUGGESTION_STORE = "promptSuggestionDecisions";
+const SUGGESTION_OUTCOME_STORE = "suggestionOutcomes";
+const INDUCED_RULE_STORE = "inducedRuleProposals";
+const CREATED_AT_INDEX = "createdAt";
 const PROFILE_KEY = "profile";
 const STATE_KEY = "state";
 
@@ -20,6 +24,9 @@ export interface TasteFeedbackInput {
   itemId?: string | null;
   imageIds?: readonly string[];
   note?: string | null;
+  // Reference images the user explicitly carried over into the follow-up edit
+  // round; records iteration continuity (local only, never sent upstream).
+  attachedSourcePaths?: readonly string[] | null;
   visualExemplars?: readonly TasteVisualExemplarInput[];
   createdAt?: number;
 }
@@ -52,6 +59,8 @@ export interface TasteFeedbackEvent {
   itemId: string | null;
   imageIds: string[];
   note: string | null;
+  // Optional for records written before this field existed.
+  attachedSourcePaths?: string[] | null;
   createdAt: number;
 }
 
@@ -69,6 +78,64 @@ export interface TasteCandidateDecision {
   createdAt: number;
 }
 
+export type PromptSuggestionDecisionValue = "accepted" | "modified" | "rejected";
+
+export interface PromptSuggestionDecisionInput {
+  id?: string;
+  batchId: string;
+  originalPrompt: string;
+  rejectNote?: string | null;
+  draftPrompt: string;
+  finalPrompt?: string | null;
+  decision: PromptSuggestionDecisionValue;
+  createdAt?: number;
+}
+
+export interface PromptSuggestionDecision {
+  id: string;
+  batchId: string;
+  originalPrompt: string;
+  rejectNote: string | null;
+  draftPrompt: string;
+  finalPrompt: string | null;
+  decision: PromptSuggestionDecisionValue;
+  createdAt: number;
+}
+
+// Links an adopted suggestion decision to the batch it produced, so the
+// panel can answer "did batches generated from suggestions do better?".
+export interface PromptSuggestionOutcomeInput {
+  id?: string;
+  decisionId: string;
+  resultBatchId: string;
+  createdAt?: number;
+}
+
+export interface PromptSuggestionOutcome {
+  id: string;
+  decisionId: string;
+  resultBatchId: string;
+  createdAt: number;
+}
+
+// Fact record for a rule the AI induced from accumulated history. Candidates
+// are rebuilt from fact tables on every profile refresh, so an induced rule
+// needs its own durable record — otherwise it would vanish before the user
+// ever gets to approve or reject it.
+export interface InducedRuleProposalInput {
+  id?: string;
+  rule: string;
+  evidence?: string | null;
+  createdAt?: number;
+}
+
+export interface InducedRuleProposal {
+  id: string;
+  rule: string;
+  evidence: string | null;
+  createdAt: number;
+}
+
 export type TasteJsonPrimitive = string | number | boolean | null;
 export type TasteJsonValue = TasteJsonPrimitive | TasteJsonValue[] | TasteJsonObject;
 export interface TasteJsonObject {
@@ -83,6 +150,14 @@ export interface TasteStorage {
   listVisualExemplars(itemIds: readonly string[]): Promise<TasteVisualExemplarAsset[]>;
   appendDecision(input: TasteDecisionInput): Promise<TasteCandidateDecision>;
   listDecisions(candidateId?: string): Promise<TasteCandidateDecision[]>;
+  appendPromptSuggestionDecision(input: PromptSuggestionDecisionInput): Promise<PromptSuggestionDecision>;
+  listPromptSuggestionDecisions(): Promise<PromptSuggestionDecision[]>;
+  appendSuggestionOutcome(input: PromptSuggestionOutcomeInput): Promise<PromptSuggestionOutcome>;
+  listSuggestionOutcomes(): Promise<PromptSuggestionOutcome[]>;
+  appendInducedRuleProposal(input: InducedRuleProposalInput): Promise<InducedRuleProposal>;
+  listInducedRuleProposals(): Promise<InducedRuleProposal[]>;
+  listRecentFeedback(limit: number): Promise<TasteFeedbackEvent[]>;
+  listRecentPromptSuggestionDecisions(limit: number): Promise<PromptSuggestionDecision[]>;
   readProfile<T = TasteProfile>(): Promise<T | null>;
   writeProfile<T extends object>(profile: T): Promise<void>;
   readState<T = TasteState>(): Promise<T | null>;
@@ -146,6 +221,11 @@ export function serializeTasteFeedback(
   const imageIds = input.imageIds ?? [];
   if (!Array.isArray(imageIds)) throw new TypeError("imageIds must be an array");
   for (const imageId of imageIds) requiredString(imageId, "imageIds entry");
+  const attachedSourcePaths = input.attachedSourcePaths ?? null;
+  if (attachedSourcePaths !== null) {
+    if (!Array.isArray(attachedSourcePaths)) throw new TypeError("attachedSourcePaths must be an array or null");
+    for (const path of attachedSourcePaths) requiredString(path, "attachedSourcePaths entry");
+  }
 
   return {
     id: requiredString(input.id ?? defaults.id ?? newRecordId("feedback"), "id"),
@@ -156,6 +236,7 @@ export function serializeTasteFeedback(
     itemId: input.itemId ?? null,
     imageIds: [...imageIds],
     note: input.note ?? null,
+    attachedSourcePaths: attachedSourcePaths && attachedSourcePaths.length > 0 ? [...attachedSourcePaths] : null,
     createdAt: timestamp(input.createdAt ?? defaults.createdAt ?? Date.now(), "createdAt"),
   };
 }
@@ -194,6 +275,63 @@ export function serializeTasteDecision(
     id: requiredString(input.id ?? defaults.id ?? newRecordId("decision"), "id"),
     candidateId: requiredString(input.candidateId, "candidateId"),
     decision: input.decision,
+    createdAt: timestamp(input.createdAt ?? defaults.createdAt ?? Date.now(), "createdAt"),
+  };
+}
+
+export function serializePromptSuggestionDecision(
+  input: PromptSuggestionDecisionInput,
+  defaults: SerializationDefaults = {},
+): PromptSuggestionDecision {
+  if (input.decision !== "accepted" && input.decision !== "modified" && input.decision !== "rejected") {
+    throw new TypeError("decision must be accepted, modified, or rejected");
+  }
+  const draftPrompt = requiredString(input.draftPrompt, "draftPrompt");
+  const finalPrompt = input.finalPrompt ?? null;
+  if (finalPrompt !== null && typeof finalPrompt !== "string") {
+    throw new TypeError("finalPrompt must be a string or null");
+  }
+  if (input.decision === "rejected" && finalPrompt !== null) {
+    throw new TypeError("rejected suggestions must not carry a finalPrompt");
+  }
+  if (input.decision === "accepted" && finalPrompt !== draftPrompt) {
+    throw new TypeError("accepted suggestions must keep finalPrompt equal to draftPrompt");
+  }
+  if (input.decision === "modified" && (finalPrompt === null || finalPrompt === draftPrompt)) {
+    throw new TypeError("modified suggestions must carry a finalPrompt different from draftPrompt");
+  }
+  return {
+    id: requiredString(input.id ?? defaults.id ?? newRecordId("prompt-suggestion"), "id"),
+    batchId: requiredString(input.batchId, "batchId"),
+    originalPrompt: promptString(input.originalPrompt, "originalPrompt"),
+    rejectNote: optionalString(input.rejectNote, "rejectNote"),
+    draftPrompt,
+    finalPrompt,
+    decision: input.decision,
+    createdAt: timestamp(input.createdAt ?? defaults.createdAt ?? Date.now(), "createdAt"),
+  };
+}
+
+export function serializePromptSuggestionOutcome(
+  input: PromptSuggestionOutcomeInput,
+  defaults: SerializationDefaults = {},
+): PromptSuggestionOutcome {
+  return {
+    id: requiredString(input.id ?? defaults.id ?? newRecordId("suggestion-outcome"), "id"),
+    decisionId: requiredString(input.decisionId, "decisionId"),
+    resultBatchId: requiredString(input.resultBatchId, "resultBatchId"),
+    createdAt: timestamp(input.createdAt ?? defaults.createdAt ?? Date.now(), "createdAt"),
+  };
+}
+
+export function serializeInducedRuleProposal(
+  input: InducedRuleProposalInput,
+  defaults: SerializationDefaults = {},
+): InducedRuleProposal {
+  return {
+    id: requiredString(input.id ?? defaults.id ?? newRecordId("induced"), "id"),
+    rule: requiredString(input.rule, "rule"),
+    evidence: optionalString(input.evidence, "evidence"),
     createdAt: timestamp(input.createdAt ?? defaults.createdAt ?? Date.now(), "createdAt"),
   };
 }
@@ -278,6 +416,10 @@ export function createTasteStorage(indexedDBFactory?: IDBFactory): TasteStorage 
         return;
       }
       const request = factory.open(TASTE_DB_NAME, DB_VERSION);
+      request.onblocked = () => {
+        databasePromise = null;
+        reject(new Error("品味数据库升级被其他连接阻塞,请关闭其他窗口后重试"));
+      };
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains(FEEDBACK_STORE)) {
@@ -292,9 +434,35 @@ export function createTasteStorage(indexedDBFactory?: IDBFactory): TasteStorage 
         if (!database.objectStoreNames.contains(VISUAL_EXEMPLAR_STORE)) {
           database.createObjectStore(VISUAL_EXEMPLAR_STORE, { keyPath: "itemId" });
         }
+        if (!database.objectStoreNames.contains(PROMPT_SUGGESTION_STORE)) {
+          database.createObjectStore(PROMPT_SUGGESTION_STORE, { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains(SUGGESTION_OUTCOME_STORE)) {
+          database.createObjectStore(SUGGESTION_OUTCOME_STORE, { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains(INDUCED_RULE_STORE)) {
+          database.createObjectStore(INDUCED_RULE_STORE, { keyPath: "id" });
+        }
+        const upgradeTransaction = request.transaction;
+        if (upgradeTransaction) {
+          for (const storeName of [FEEDBACK_STORE, PROMPT_SUGGESTION_STORE]) {
+            const store = upgradeTransaction.objectStore(storeName);
+            if (!store.indexNames.contains(CREATED_AT_INDEX)) {
+              store.createIndex(CREATED_AT_INDEX, "createdAt");
+            }
+          }
+        }
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error("Unable to open taste database"));
+      request.onsuccess = () => {
+        const database = request.result;
+        // Yield to a future upgrade from another realm instead of blocking it forever.
+        database.onversionchange = () => database.close();
+        resolve(database);
+      };
+      request.onerror = () => {
+        databasePromise = null;
+        reject(request.error ?? new Error("Unable to open taste database"));
+      };
     });
     return databasePromise;
   };
@@ -314,6 +482,33 @@ export function createTasteStorage(indexedDBFactory?: IDBFactory): TasteStorage 
     const records = requestAsPromise<T[]>(transaction.objectStore(storeName).getAll());
     const [result] = await Promise.all([records, done]);
     return result;
+  };
+
+  // Reads only the newest `limit` records via the createdAt index instead of
+  // materializing the whole (append-only, ever-growing) table.
+  const getRecentRecords = async <T>(storeName: string, limit: number): Promise<T[]> => {
+    if (limit <= 0) return [];
+    const database = await openDatabase();
+    const transaction = database.transaction(storeName, "readonly");
+    const done = transactionDone(transaction);
+    const index = transaction.objectStore(storeName).index(CREATED_AT_INDEX);
+    const records: T[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const request = index.openCursor(null, "prev");
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || records.length >= limit) {
+          resolve();
+          return;
+        }
+        records.push(cursor.value as T);
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error ?? new Error("IndexedDB cursor failed"));
+    });
+    await done;
+    // Return oldest-first to match the ordering contract of the full list* reads.
+    return records.reverse();
   };
 
   const getRecords = async <T>(storeName: string, keys: readonly string[]): Promise<T[]> => {
@@ -399,6 +594,41 @@ export function createTasteStorage(indexedDBFactory?: IDBFactory): TasteStorage 
         .map((decision) => ({ ...decision }))
         .sort(compareRecords);
     },
+    async appendPromptSuggestionDecision(input) {
+      const decision = serializePromptSuggestionDecision(input);
+      await addRecord(PROMPT_SUGGESTION_STORE, decision);
+      return decision;
+    },
+    async listPromptSuggestionDecisions() {
+      const decisions = await getAllRecords<PromptSuggestionDecision>(PROMPT_SUGGESTION_STORE);
+      return decisions.map((decision) => ({ ...decision })).sort(compareRecords);
+    },
+    async appendSuggestionOutcome(input) {
+      const outcome = serializePromptSuggestionOutcome(input);
+      await addRecord(SUGGESTION_OUTCOME_STORE, outcome);
+      return outcome;
+    },
+    async listSuggestionOutcomes() {
+      const outcomes = await getAllRecords<PromptSuggestionOutcome>(SUGGESTION_OUTCOME_STORE);
+      return outcomes.map((outcome) => ({ ...outcome })).sort(compareRecords);
+    },
+    async appendInducedRuleProposal(input) {
+      const proposal = serializeInducedRuleProposal(input);
+      await addRecord(INDUCED_RULE_STORE, proposal);
+      return proposal;
+    },
+    async listInducedRuleProposals() {
+      const proposals = await getAllRecords<InducedRuleProposal>(INDUCED_RULE_STORE);
+      return proposals.map((proposal) => ({ ...proposal })).sort(compareRecords);
+    },
+    async listRecentFeedback(limit) {
+      const events = await getRecentRecords<TasteFeedbackEvent>(FEEDBACK_STORE, limit);
+      return events.map((event) => ({ ...event, imageIds: [...event.imageIds] }));
+    },
+    async listRecentPromptSuggestionDecisions(limit) {
+      const decisions = await getRecentRecords<PromptSuggestionDecision>(PROMPT_SUGGESTION_STORE, limit);
+      return decisions.map((decision) => ({ ...decision }));
+    },
     readProfile<T = TasteProfile>() {
       return readDocument<T>(PROFILE_KEY);
     },
@@ -441,6 +671,46 @@ export function appendTasteDecision(input: TasteDecisionInput): Promise<TasteCan
 
 export function listTasteDecisions(candidateId?: string): Promise<TasteCandidateDecision[]> {
   return getDefaultStorage().listDecisions(candidateId);
+}
+
+export function appendTastePromptSuggestionDecision(
+  input: PromptSuggestionDecisionInput,
+): Promise<PromptSuggestionDecision> {
+  return getDefaultStorage().appendPromptSuggestionDecision(input);
+}
+
+export function listTastePromptSuggestionDecisions(): Promise<PromptSuggestionDecision[]> {
+  return getDefaultStorage().listPromptSuggestionDecisions();
+}
+
+export function appendTasteSuggestionOutcome(
+  input: PromptSuggestionOutcomeInput,
+): Promise<PromptSuggestionOutcome> {
+  return getDefaultStorage().appendSuggestionOutcome(input);
+}
+
+export function listTasteSuggestionOutcomes(): Promise<PromptSuggestionOutcome[]> {
+  return getDefaultStorage().listSuggestionOutcomes();
+}
+
+export function appendTasteInducedRuleProposal(
+  input: InducedRuleProposalInput,
+): Promise<InducedRuleProposal> {
+  return getDefaultStorage().appendInducedRuleProposal(input);
+}
+
+export function listTasteInducedRuleProposals(): Promise<InducedRuleProposal[]> {
+  return getDefaultStorage().listInducedRuleProposals();
+}
+
+export function listRecentTasteFeedback(limit: number): Promise<TasteFeedbackEvent[]> {
+  return getDefaultStorage().listRecentFeedback(limit);
+}
+
+export function listRecentTastePromptSuggestionDecisions(
+  limit: number,
+): Promise<PromptSuggestionDecision[]> {
+  return getDefaultStorage().listRecentPromptSuggestionDecisions(limit);
 }
 
 export function readTasteProfile<T = TasteProfile>(): Promise<T | null> {

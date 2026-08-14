@@ -28,6 +28,13 @@ export interface FeedbackTasteSource {
   inference: "explicit-feedback";
 }
 
+export interface InducedTasteSource {
+  type: "induced";
+  proposalId: string;
+  evidence?: string;
+  inference: "ai-induced";
+}
+
 export interface TasteCandidate {
   schemaVersion: 1;
   id: string;
@@ -35,7 +42,10 @@ export interface TasteCandidate {
   target: "critic";
   kind: TasteCandidateKind;
   rule: string;
-  source: HistoryTasteSource | FeedbackTasteSource;
+  // Set when the rule text was polished after generation; collectTasteProfile
+  // preserves refined text instead of regenerating the raw template.
+  refined?: "ai" | "user";
+  source: HistoryTasteSource | FeedbackTasteSource | InducedTasteSource;
 }
 
 export interface TasteFeedbackEvent {
@@ -53,7 +63,7 @@ export interface TasteFeedbackEvent {
 export interface ApprovedCriticRule {
   candidateId: string;
   rule: string;
-  sourceType: "history" | "feedback";
+  sourceType: "history" | "feedback" | "induced";
 }
 
 export interface ApprovedCriticRulesSnapshot {
@@ -232,6 +242,34 @@ export function feedbackEventToTasteCandidate(event: TasteFeedbackEvent): TasteC
   };
 }
 
+// The candidate id hashes the canonical rule text (not the proposal id), so
+// re-inducing the same rule later maps onto the same candidate — an earlier
+// approve/reject decision keeps applying instead of resurfacing the rule.
+export function inducedProposalToTasteCandidate(proposal: {
+  id: string;
+  rule: string;
+  evidence?: string | null;
+}): TasteCandidate | null {
+  const rule = compactText(proposal.rule);
+  if (!rule) return null;
+  const evidence = compactText(proposal.evidence);
+
+  return {
+    schemaVersion: 1,
+    id: stableCandidateId(["induced", canonicalText(rule)]),
+    status: "pending",
+    target: "critic",
+    kind: "feedback",
+    rule,
+    source: {
+      type: "induced",
+      proposalId: proposal.id,
+      ...(evidence ? { evidence } : {}),
+      inference: "ai-induced",
+    },
+  };
+}
+
 export function buildApprovedCriticRulesSnapshot(
   candidates: readonly TasteCandidate[],
 ): ApprovedCriticRulesSnapshot {
@@ -262,7 +300,7 @@ export function buildCriticRulesSnapshot(
     const candidateId = compactText(input.candidateId);
     const rule = compactText(input.rule);
     if (!candidateId || !rule) throw new Error("critic rules require a candidate id and rule");
-    if (input.sourceType !== "history" && input.sourceType !== "feedback") {
+    if (input.sourceType !== "history" && input.sourceType !== "feedback" && input.sourceType !== "induced") {
       throw new Error("critic rules require a valid source type");
     }
     rulesById.set(candidateId, { candidateId, rule, sourceType: input.sourceType });

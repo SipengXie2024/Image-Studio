@@ -23,6 +23,7 @@ function createHarness(options = {}) {
     history: [...(options.history ?? [])],
     feedback: [],
     decisions: [],
+    inducedProposals: [...(options.inducedProposals ?? [])],
     profile: null,
     bootstrapState: null,
     clock: options.clock ?? 100,
@@ -99,6 +100,7 @@ function createHarness(options = {}) {
       return structuredClone(data.history);
     },
     async appendFeedback(input) {
+      if (options.appendFeedbackError) throw options.appendFeedbackError;
       calls.feedbackInputs.push(structuredClone(input));
       const event = {
         id: input.id ?? `feedback-${data.feedback.length + 1}`,
@@ -135,6 +137,9 @@ function createHarness(options = {}) {
         ? data.decisions
         : data.decisions.filter((entry) => entry.candidateId === candidateId);
       return structuredClone(records);
+    },
+    async listInducedProposals() {
+      return structuredClone(data.inducedProposals);
     },
     async readProfile() {
       return data.profile === null ? null : structuredClone(data.profile);
@@ -280,6 +285,85 @@ test("preserves edit feedback verbatim and only places the user's own edit text 
     [...new TextEncoder().encode(note)],
   );
   assert.equal(harness.calls.toasts.at(-1)?.kind, "success");
+});
+
+test("carries kept batch references into the rerun and records iteration continuity", async () => {
+  const item = historyItem("image-a", {
+    mode: "edit",
+    savedPath: "C:\\images\\image-a.png",
+    sourcePaths: ["C:\\refs\\pose.png", "C:\\refs\\palette.png"],
+  });
+  const harness = createHarness({
+    batchResults: [item],
+    sources: [
+      { path: "C:\\refs\\pose.png", name: "pose.png", size: 123 },
+      { path: "C:\\images\\stale-source.png", name: "stale-source.png" },
+    ],
+  });
+
+  await harness.actions.editBatchResult({
+    item,
+    items: [item],
+    note: "保持姿势，参考第二张的配色",
+    keepSourcePaths: ["C:\\refs\\pose.png", "C:\\refs\\palette.png"],
+  });
+
+  assert.deepEqual(
+    harness.calls.submitted[0].sources.map((source) => source.path),
+    ["C:\\images\\image-a.png", "C:\\refs\\pose.png", "C:\\refs\\palette.png"],
+  );
+  // pose.png was still in the source tray, so its prepared entry is reused as-is.
+  assert.equal(harness.calls.submitted[0].sources[1].size, 123);
+  // palette.png was gone from the tray; a minimal path-only source is rebuilt.
+  assert.equal(harness.calls.submitted[0].sources[2].name, "palette.png");
+  assert.deepEqual(
+    harness.calls.feedbackInputs[0].attachedSourcePaths,
+    ["C:\\refs\\pose.png", "C:\\refs\\palette.png"],
+  );
+});
+
+test("drops carry-over paths outside the batch generation and the base image itself", async () => {
+  const item = historyItem("image-a", {
+    mode: "edit",
+    savedPath: "C:\\images\\image-a.png",
+    sourcePaths: ["C:\\refs\\pose.png", "C:\\images\\image-a.png"],
+  });
+  const harness = createHarness({ batchResults: [item] });
+
+  await harness.actions.editBatchResult({
+    item,
+    items: [item],
+    note: "只改弓",
+    keepSourcePaths: [
+      "C:\\evil\\injected.png",
+      "C:\\images\\image-a.png",
+      "C:\\refs\\pose.png",
+      "C:\\refs\\pose.png",
+    ],
+  });
+
+  assert.deepEqual(
+    harness.calls.submitted[0].sources.map((source) => source.path),
+    ["C:\\images\\image-a.png", "C:\\refs\\pose.png"],
+  );
+  assert.deepEqual(harness.calls.feedbackInputs[0].attachedSourcePaths, ["C:\\refs\\pose.png"]);
+});
+
+test("leaves edit feedback without attached paths when nothing is carried over", async () => {
+  const item = historyItem("image-a", {
+    mode: "edit",
+    savedPath: "C:\\images\\image-a.png",
+    sourcePaths: ["C:\\refs\\pose.png"],
+  });
+  const harness = createHarness({ batchResults: [item] });
+
+  await harness.actions.editBatchResult({ item, items: [item], note: "只改弓" });
+
+  assert.deepEqual(
+    harness.calls.submitted[0].sources.map((source) => source.path),
+    ["C:\\images\\image-a.png"],
+  );
+  assert.equal(harness.calls.feedbackInputs[0].attachedSourcePaths, undefined);
 });
 
 test("keeps saved edit feedback closed when automatic generation cannot start", async () => {
@@ -438,4 +522,92 @@ test("snoozes 'later' for seven days without marking bootstrap acknowledged", as
   harness.data.clock = harness.data.bootstrapState.snoozedUntil;
   await harness.actions.bootstrapTaste();
   assert.equal(harness.state.tasteBootstrapOpen, true);
+});
+
+test("refresh preserves refined rule text instead of regenerating the template", async () => {
+  const item = historyItem("image-a", { savedPath: "C:\\images\\image-a.png" });
+  const harness = createHarness({ batchResults: [item] });
+  await harness.actions.rejectBatch({ items: [item], note: "脸漂移了" });
+  const candidate = harness.state.tasteProfile.candidates.find((entry) => entry.source.type === "feedback");
+  assert.ok(candidate, "reject with note should create a feedback candidate");
+  const templateRule = candidate.rule;
+
+  // Simulate a distill/manual edit persisted into the profile document.
+  harness.data.profile = {
+    ...harness.state.tasteProfile,
+    candidates: harness.state.tasteProfile.candidates.map((entry) => (
+      entry.id === candidate.id ? { ...entry, rule: "下装偏好短裙,避免短裤", refined: "ai" } : entry
+    )),
+  };
+
+  await harness.actions.pickBatchResult(item);
+  const refreshed = harness.state.tasteProfile.candidates.find((entry) => entry.id === candidate.id);
+  assert.ok(refreshed);
+  assert.equal(refreshed.rule, "下装偏好短裙,避免短裤");
+  assert.equal(refreshed.refined, "ai");
+  assert.notEqual(refreshed.rule, templateRule);
+});
+
+test("rejectBatch leaves a prompt retry offer only after feedback is stored", async () => {
+  const first = historyItem("image-a");
+  const second = historyItem("image-b");
+  const harness = createHarness({ batchResults: [first, second] });
+
+  await harness.actions.rejectBatch({ items: [first, second], note: "构图方向不对" });
+
+  assert.deepEqual(harness.state.promptRetryOffer, {
+    batchId: "batch-1",
+    originalPrompt: first.originalPrompt,
+    submittedPrompt: first.submittedPrompt,
+    rejectNote: "构图方向不对",
+    mode: "generate",
+    sourcePaths: [],
+    createdAt: 100,
+  });
+});
+
+test("rejectBatch leaves no retry offer when feedback storage fails", async () => {
+  const first = historyItem("image-a");
+  const harness = createHarness({
+    batchResults: [first],
+    appendFeedbackError: new Error("storage unavailable"),
+  });
+
+  await assert.rejects(
+    harness.actions.rejectBatch({ items: [first], note: "构图方向不对" }),
+    /storage unavailable/,
+  );
+  assert.ok(!harness.state.promptRetryOffer);
+});
+
+test("pending induced candidates survive profile rebuilds and honor later decisions", async () => {
+  const harness = createHarness({
+    inducedProposals: [{
+      id: "induced-1",
+      rule: "评审时降低高光过曝的结果",
+      evidence: "多条 reject 提到过曝",
+      createdAt: 50,
+    }],
+  });
+
+  await harness.actions.refreshTasteProfile();
+  const first = harness.data.profile.candidates.find((entry) => entry.source.type === "induced");
+  assert.ok(first, "induced proposal should surface as a candidate");
+  assert.equal(first.status, "pending");
+  assert.equal(first.rule, "评审时降低高光过曝的结果");
+  assert.equal(first.source.evidence, "多条 reject 提到过曝");
+
+  // A rebuild without any decision must not drop the still-pending candidate —
+  // it is backed by its own fact table, not by the mutable profile snapshot.
+  await harness.actions.refreshTasteProfile();
+  const second = harness.data.profile.candidates.find((entry) => entry.id === first.id);
+  assert.ok(second, "pending induced candidate must survive the rebuild");
+  assert.equal(second.status, "pending");
+
+  await harness.actions.decideTasteCandidate(first.id, "approve");
+  assert.deepEqual(harness.data.profile.approvedCandidateIds, [first.id]);
+
+  await harness.actions.refreshTasteProfile();
+  const third = harness.data.profile.candidates.find((entry) => entry.id === first.id);
+  assert.equal(third.status, "approved");
 });

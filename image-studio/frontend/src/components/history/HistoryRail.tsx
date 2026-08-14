@@ -32,7 +32,7 @@ export function HistoryRail() {
   const {
     history, currentImage, reuseAsSource, deleteHistoryItem, clearHistory, setField,
     compareB, setCompareB, pushToast, fullscreen,
-    applyHistoryParams, regenerateFromHistory,
+    applyHistoryParams, regenerateFromHistory, reopenBatchFromHistory,
     openResultDetail, apiKey, baseURL, apiMode,
     profiles, activeProfileId, setActiveProfile,
     openUpstreamConfig, openHistoryTimeline, testAPIKey, isTestingKey,
@@ -133,6 +133,7 @@ export function HistoryRail() {
     onOpenDetail: openResultDetail,
     onApplyParams: applyHistoryParams,
     onRegenerate: (item) => void regenerateFromHistory(item),
+    onReopenBatch: (item) => reopenBatchFromHistory(item),
     onReuseAsSource: (item) => void reuseAsSource(item),
     onToggleCompare: (item) => setCompareB(compareB?.id === item.id ? null : item),
     onDelete: (item) => {

@@ -37,7 +37,9 @@ export async function prepareNativePromptImagePaths(
 ): Promise<string[]> {
   const sources: readonly NativePromptSourceLike[] = input.sourceImages?.length
     ? input.sourceImages
-    : [...(input.imagePaths ?? []), input.imagePath ?? ""].map((path) => ({ path }));
+    : [...(input.imagePaths ?? []), input.imagePath ?? ""]
+      .filter((path) => path.trim())
+      .map((path) => ({ path }));
   const paths: string[] = [];
   const seen = new Set<string>();
   const preserveMultiplicity = Boolean(input.sourceImages?.length);
@@ -61,7 +63,15 @@ export async function prepareNativePromptImagePaths(
       imageB64 = await bridge.readNonNativePathAsBase64(sourcePath).catch(() => "");
     }
     if (!imageB64) {
-      throw new Error(`无法准备第 ${index + 1} 个图片附件`);
+      // The readback probe only accepts managed roots, but dialog-picked files
+      // live anywhere on disk. Hand the raw path to the host: its upload reader
+      // accepts any readable file (same as generation) and surfaces the real
+      // filesystem error otherwise.
+      if (isNativeFilePath(sourcePath)) {
+        appendPreparedPath(paths, seen, sourcePath, preserveMultiplicity);
+        continue;
+      }
+      throw new Error(`无法准备第 ${index + 1} 个图片附件(${source.name?.trim() || sourcePath || "无路径"})`);
     }
 
     const ordinal = String(index + 1).padStart(3, "0");

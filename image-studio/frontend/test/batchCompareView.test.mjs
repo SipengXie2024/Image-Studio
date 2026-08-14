@@ -4,6 +4,7 @@ import test from "node:test";
 const {
   batchCompareItemIds,
   batchTileIntent,
+  collectHistoryBatchItems,
   resolveBatchFocus,
   stepBatchFocus,
 } = await import("../src/lib/batchCompareView.ts");
@@ -34,6 +35,37 @@ test("batch focus navigation wraps without changing result order", () => {
 
 test("batch focus navigation ignores a non-member item", () => {
   assert.equal(stepBatchFocus(["a", "b"], "missing", 1), null);
+});
+
+test("collects only same-batch history items sorted by batchIndex", () => {
+  const history = [
+    { id: "img-x", batchId: "batch-other", batchIndex: 0, createdAt: 40 },
+    { id: "img-3", batchId: "batch-9", batchIndex: 2, createdAt: 30 },
+    { id: "img-1", batchId: "batch-9", batchIndex: 0, createdAt: 30 },
+    { id: "img-loner", createdAt: 35 },
+    { id: "img-2", batchId: "batch-9", batchIndex: 1, createdAt: 30 },
+  ];
+
+  const collected = collectHistoryBatchItems(history, "batch-9");
+
+  assert.deepEqual(collected.map((item) => item.id), ["img-1", "img-2", "img-3"]);
+  // The source list order must stay untouched for the history rail.
+  assert.deepEqual(history.map((item) => item.id), ["img-x", "img-3", "img-1", "img-loner", "img-2"]);
+});
+
+test("falls back to createdAt order for legacy batches without batchIndex", () => {
+  const history = [
+    { id: "img-new", batchId: "batch-legacy", createdAt: 8 },
+    { id: "img-old", batchId: "batch-legacy", createdAt: 5 },
+  ];
+
+  const collected = collectHistoryBatchItems(history, "batch-legacy");
+
+  assert.deepEqual(collected.map((item) => item.id), ["img-old", "img-new"]);
+});
+
+test("returns an empty batch when no history item matches", () => {
+  assert.deepEqual(collectHistoryBatchItems([{ id: "a", createdAt: 1 }], "batch-9"), []);
 });
 
 test("ordinary tile clicks focus inside comparison instead of opening single view", () => {

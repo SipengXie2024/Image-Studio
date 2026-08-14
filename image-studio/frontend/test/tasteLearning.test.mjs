@@ -185,3 +185,52 @@ test("taste learning never mutates original or submitted prompts", () => {
   assert.equal("prompt" in snapshot, false);
   assert.equal("submittedPrompt" in snapshot, false);
 });
+
+test("induced proposals become pending critic candidates keyed by rule text", () => {
+  const candidate = taste.inducedProposalToTasteCandidate({
+    id: "induced-1",
+    rule: "  评审时降低  高光过曝的结果  ",
+    evidence: "多条 reject 都提到过曝",
+  });
+
+  assert.equal(candidate.status, "pending");
+  assert.equal(candidate.target, "critic");
+  assert.equal(candidate.rule, "评审时降低 高光过曝的结果");
+  assert.deepEqual(candidate.source, {
+    type: "induced",
+    proposalId: "induced-1",
+    evidence: "多条 reject 都提到过曝",
+    inference: "ai-induced",
+  });
+
+  // Same rule text from a later induction run maps onto the same candidate id,
+  // so an earlier approve/reject decision keeps applying to the re-induced rule.
+  const reInduced = taste.inducedProposalToTasteCandidate({
+    id: "induced-99",
+    rule: "评审时降低 高光过曝的结果",
+  });
+  assert.equal(reInduced.id, candidate.id);
+  assert.equal("evidence" in reInduced.source, false);
+
+  const different = taste.inducedProposalToTasteCandidate({ id: "induced-2", rule: "另一条规则" });
+  assert.notEqual(different.id, candidate.id);
+
+  assert.equal(taste.inducedProposalToTasteCandidate({ id: "induced-3", rule: "   " }), null);
+});
+
+test("approved induced rules enter the critic snapshot with their own source type", () => {
+  const induced = taste.inducedProposalToTasteCandidate({
+    id: "induced-1",
+    rule: "评审时优先保留冷色调的候选",
+  });
+  const snapshot = taste.buildApprovedCriticRulesSnapshot([
+    { ...induced, status: "approved" },
+  ]);
+
+  assert.equal(snapshot.target, "critic");
+  assert.deepEqual(snapshot.rules, [{
+    candidateId: induced.id,
+    rule: "评审时优先保留冷色调的候选",
+    sourceType: "induced",
+  }]);
+});

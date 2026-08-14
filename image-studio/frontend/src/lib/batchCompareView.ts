@@ -2,6 +2,14 @@ export function batchCompareItemIds<T extends { id: string }>(items: T[]): strin
   return items.map((item) => item.id);
 }
 
+export function collectHistoryBatchItems<
+  T extends { batchId?: string; batchIndex?: number; createdAt: number },
+>(history: readonly T[], batchId: string): T[] {
+  return history
+    .filter((item) => item.batchId === batchId)
+    .sort((a, b) => (a.batchIndex ?? 0) - (b.batchIndex ?? 0) || a.createdAt - b.createdAt);
+}
+
 export function resolveBatchFocus(itemIds: string[], requestedId: string | null): string | null {
   return requestedId && itemIds.includes(requestedId) ? requestedId : null;
 }

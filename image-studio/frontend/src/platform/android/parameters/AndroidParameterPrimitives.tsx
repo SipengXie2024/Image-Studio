@@ -177,6 +177,7 @@ export function AndroidStyleChips({
   value: string;
   onChange: (value: string) => void;
 }) {
+  if (STYLE_CHIPS.length === 0) return null;
   return (
     <div className="android-parameter-chip-grid">
       {STYLE_CHIPS.map((item) => {

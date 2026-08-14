@@ -1,6 +1,9 @@
 import { useRef, useState, type FormEvent } from "react";
+import { Loader2, Wand2 } from "lucide-react";
 import type { HistoryItem } from "../../types/domain";
 import { Modal } from "../common/Modal";
+import { useStudioStore } from "../../state/studioStore";
+import { SourceLightbox, SourceThumb, type SourcePreviewImage } from "./sourceThumbs";
 
 export type FeedbackModalRequest =
   | { kind: "edit"; item: HistoryItem; items: HistoryItem[] }
@@ -8,7 +11,7 @@ export type FeedbackModalRequest =
 
 export type BatchReviewCallbacks = {
   onPick?: (item: HistoryItem) => void | Promise<void>;
-  onEdit?: (input: { item: HistoryItem; items: HistoryItem[]; note: string }) => void | Promise<void>;
+  onEdit?: (input: { item: HistoryItem; items: HistoryItem[]; note: string; keepSourcePaths?: readonly string[] }) => void | Promise<void>;
   onReject?: (input: { items: HistoryItem[]; note: string }) => void | Promise<void>;
 };
 
@@ -19,15 +22,37 @@ export function FeedbackModal({
 }: {
   request: FeedbackModalRequest;
   onClose: () => void;
-  onSubmit: (note: string) => void | Promise<void>;
+  onSubmit: (note: string, keepSourcePaths: string[]) => void | Promise<void>;
 }) {
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const [error, setError] = useState("");
+  const [previewImage, setPreviewImage] = useState<SourcePreviewImage | null>(null);
+  const [keptPaths, setKeptPaths] = useState<readonly string[]>([]);
+  const refineEditNote = useStudioStore((state) => state.refineEditNote);
+  const refining = useStudioStore((state) => state.editNoteRefining);
   const isEdit = request.kind === "edit";
   const trimmedNote = note.trim();
   const prompt = isEdit ? request.item.prompt.trim() : "";
+  const basePath = isEdit ? request.item.savedPath?.trim() ?? "" : "";
+  // Reference images the rejected batch was generated with; each can be kept
+  // for the next edit round alongside the selected base image.
+  const referencePaths = isEdit
+    ? Array.from(new Set((request.item.sourcePaths ?? []).filter((path) => path.trim() && path !== basePath)))
+    : [];
+
+  function toggleKept(path: string) {
+    setKeptPaths((current) => (
+      current.includes(path) ? current.filter((entry) => entry !== path) : [...current, path]
+    ));
+  }
+
+  async function refine() {
+    if (!isEdit || refining || submitting) return;
+    const refined = await refineEditNote({ note, originalPrompt: request.item.prompt });
+    if (refined) setNote(refined);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,7 +61,7 @@ export function FeedbackModal({
     setSubmitting(true);
     setError("");
     try {
-      await onSubmit(note);
+      await onSubmit(note, referencePaths.filter((path) => keptPaths.includes(path)));
     } catch (submitError) {
       submittingRef.current = false;
       setError(submitError instanceof Error ? submitError.message : String(submitError));
@@ -67,9 +92,54 @@ export function FeedbackModal({
           ) : null}
         </div>
 
+        {isEdit ? (
+          <div className="space-y-1.5">
+            <p className="taste-list-item-meta">下一轮将以这张选定图为基底进行编辑:</p>
+            <div className="taste-source-thumbs">
+              {basePath
+                ? <SourceThumb path={basePath} onPreview={setPreviewImage} />
+                : <span className="taste-chip taste-chip-muted">选中图(本地文件不可用)</span>}
+            </div>
+            {referencePaths.length > 0 ? (
+              <>
+                <p className="taste-list-item-meta">本批生成时的参考图 · 勾选后随基底图一起进入下一轮,harness 会记住你延续了哪些参考:</p>
+                <div className="taste-source-thumbs">
+                  {referencePaths.map((path) => (
+                    <label
+                      key={path}
+                      className={`taste-source-keep ${keptPaths.includes(path) ? "kept" : ""}`}
+                      title="勾选后这张参考图继续参与下一轮编辑"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={keptPaths.includes(path)}
+                        onChange={() => toggleKept(path)}
+                        disabled={submitting}
+                      />
+                      <SourceThumb path={path} onPreview={setPreviewImage} />
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
         <label className="block space-y-2">
-          <span className="text-xs font-medium text-zinc-700 dark:text-zinc-200">
+          <span className="flex items-center justify-between gap-2 text-xs font-medium text-zinc-700 dark:text-zinc-200">
             {isEdit ? "你的建议（必填）" : "不满意的原因（选填）"}
+            {isEdit ? (
+              <button
+                type="button"
+                onClick={() => void refine()}
+                disabled={refining || submitting || !trimmedNote}
+                title="让 harness 把你的建议改写成更明确的编辑指令;结果回填后你仍可修改"
+                className="taste-btn taste-btn-ghost taste-btn-sm"
+              >
+                {refining ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                {refining ? "优化中..." : "让 harness 优化"}
+              </button>
+            ) : null}
           </span>
           <textarea
             autoFocus
@@ -87,24 +157,25 @@ export function FeedbackModal({
           </p>
         ) : null}
 
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <div className="taste-modal-actions">
           <button
             type="button"
             onClick={onClose}
             disabled={submitting}
-            className="platform-action-btn rounded-[10px] border border-black/[0.08] px-4 py-2 text-sm text-zinc-700 disabled:opacity-50 dark:border-white/[0.08] dark:text-zinc-300"
+            className="taste-btn taste-btn-ghost"
           >
             取消
           </button>
           <button
             type="submit"
             disabled={submitting || (isEdit && !trimmedNote)}
-            className={`inline-flex items-center justify-center rounded-[10px] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 ${isEdit ? "bg-[var(--accent)] hover:bg-[var(--accent-2)]" : "bg-red-500 hover:bg-red-600"}`}
+            className={`taste-btn ${isEdit ? "taste-btn-primary" : "taste-btn-danger"}`}
           >
             {submitting ? "提交中..." : isEdit ? "确认选定并提交建议" : "确认全部不满意"}
           </button>
         </div>
       </form>
+      {previewImage ? <SourceLightbox image={previewImage} onClose={() => setPreviewImage(null)} /> : null}
     </Modal>
   );
 }

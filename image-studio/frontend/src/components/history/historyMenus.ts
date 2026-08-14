@@ -9,6 +9,7 @@ type SharedHistoryMenuActions = {
   onOpenRaw: () => void;
   onApplyParams: () => void;
   onRegenerate: () => void;
+  onReopenBatch: () => void;
   onReuseAsSource: () => void;
   onToggleCompare: () => void;
   onDelete: () => void;
@@ -49,6 +50,12 @@ export function buildSharedHistoryMenu(
       label: "以此参数重新生成",
       icon: "↻",
       onClick: actions.onRegenerate,
+    },
+    {
+      label: "重新进入批次评审",
+      icon: "▦",
+      disabled: !item.batchId,
+      onClick: actions.onReopenBatch,
     },
     {
       separatorBefore: true,

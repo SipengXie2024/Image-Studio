@@ -63,6 +63,26 @@ test("critic payload keeps evaluation input verbatim and never asks for prompt r
   });
 });
 
+test("suggest payload keeps the request text verbatim and asks for plain prompt text only", () => {
+  const suggestInput = ` \n${JSON.stringify({
+    schemaVersion: 1,
+    operation: "suggest",
+    originalPrompt: "  keep  spacing  ",
+    rejectReason: "比例太成熟",
+  }, null, 2)}\n\t`;
+  const payload = buildPromptOptimizePayload({
+    prompt: suggestInput,
+    mode: "suggest",
+    textModelID: "gpt-5.5",
+  }, []);
+  assert.equal(payload.input[0].content[0].text, suggestInput);
+  assert.equal(payload.input[0].content.length, 1);
+  assert.match(payload.instructions, /rejection feedback and taste history/i);
+  assert.match(payload.instructions, /Only return the revised prompt text/i);
+  assert.match(payload.instructions, /same language as the original prompt/i);
+  assert.equal(payload.text, undefined);
+});
+
 test("critic payload rejects evaluation input without a strict response schema", () => {
   assert.throws(
     () => buildPromptOptimizePayload({ prompt: "{}", mode: "critic" }, []),

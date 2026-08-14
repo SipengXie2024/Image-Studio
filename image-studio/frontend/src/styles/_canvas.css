@@ -488,18 +488,55 @@ html.dark .stream-preview-badge {
   white-space: nowrap;
 }
 .batch-grid-close {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
   border-radius: 8px;
-  padding: 5px 10px;
+  padding: 6px 14px;
   font-size: 11px;
-  transition: color 120ms, border-color 120ms, background 120ms;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: filter 120ms, box-shadow 120ms;
 }
 .batch-grid-close:hover {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: var(--accent-soft);
+  filter: brightness(1.1);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.24);
+}
+/* Toolbar batch/single toggle: solid accent so it reads as a button, not a
+   label. Handwritten (unlayered) on purpose — layered utilities are unreliable
+   in the target WebView. */
+.canvas-batch-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: filter 120ms, box-shadow 120ms;
+}
+.canvas-batch-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+.canvas-batch-toggle:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.24);
+}
+.canvas-batch-toggle:active {
+  transform: scale(0.97);
 }
 .batch-grid {
   flex: 1 1 auto;

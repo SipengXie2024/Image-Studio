@@ -10,6 +10,7 @@ type HistoryContextMenuArgs = {
   onDelete: (item: HistoryItem) => void;
   onOpenDetail: (item: HistoryItem) => void;
   onRegenerate: (item: HistoryItem) => void;
+  onReopenBatch: (item: HistoryItem) => void;
   onReuseAsSource: (item: HistoryItem) => void;
   onToggleCompare: (item: HistoryItem) => void;
   pushToast: (message: string, kind?: Toast["kind"]) => void;
@@ -28,6 +29,7 @@ export function useHistoryContextMenu({
   onDelete,
   onOpenDetail,
   onRegenerate,
+  onReopenBatch,
   onReuseAsSource,
   onToggleCompare,
   pushToast,
@@ -51,6 +53,7 @@ export function useHistoryContextMenu({
       onOpenRaw: () => setRawPath(item.rawPath ?? null),
       onApplyParams: () => onApplyParams(item),
       onRegenerate: () => onRegenerate(item),
+      onReopenBatch: () => onReopenBatch(item),
       onReuseAsSource: () => onReuseAsSource(item),
       onToggleCompare: () => onToggleCompare(item),
       onDelete: () => onDelete(item),

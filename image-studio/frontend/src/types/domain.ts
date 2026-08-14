@@ -243,6 +243,10 @@ export interface HistoryItem {
 export interface TasteReview {
   schemaVersion: 1;
   criticRulesVersion: string;
+  // Learning provenance shown to the user ("N approved rules + M exemplars
+  // were applied"); optional so pre-existing persisted reviews stay valid.
+  appliedRuleCount?: number;
+  appliedExemplarCount?: number;
   reviewedAt: number;
   score: number;
   summary: string;

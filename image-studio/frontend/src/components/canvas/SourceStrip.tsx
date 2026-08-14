@@ -143,7 +143,7 @@ function SourceTile({
       <button
         onClick={(e) => { e.stopPropagation(); removeSource(index); }}
         title="移除"
-        className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center bg-zinc-950/70 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 rounded-bl transition-all"
+        className="source-remove-btn"
       >
         <X className="w-2.5 h-2.5" />
       </button>

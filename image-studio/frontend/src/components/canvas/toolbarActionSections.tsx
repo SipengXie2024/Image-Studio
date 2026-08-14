@@ -1,6 +1,6 @@
 import {
-  Brush, Crop, Eraser, FlipHorizontal, FlipVertical, Hand,
-  Info, MoveRight, Pencil, RotateCcw, RotateCw, Save, Square,
+  Brush, Crop, Eraser, Expand, FlipHorizontal, FlipVertical, Hand,
+  Info, LayoutGrid, MoveRight, Pencil, RotateCcw, RotateCw, Save, Square,
   Trash2, Maximize, Minimize, Type as TypeIcon, Upload,
 } from "lucide-react";
 import { ANNOTATION_COLORS } from "../../types/domain";
@@ -235,13 +235,15 @@ export function ResultMetaSection({
   return (
     <>
       {showBatchGridToggle ? (
-        <ToolbarTextButton
+        <button
+          type="button"
           onClick={onToggleResultGrid}
-          selected={resultGridOpen}
           title={resultGridOpen ? "进入单图编辑" : `返回本批 ${batchResultCount} 张图片进行对比`}
+          className="canvas-batch-toggle"
         >
+          {resultGridOpen ? <Expand /> : <LayoutGrid />}
           {resultGridOpen ? "进入单图" : `批次对比 ${batchResultCount}`}
-        </ToolbarTextButton>
+        </button>
       ) : null}
       <HistoryMetaBadges items={metaBadges} compact className="opacity-90" />
     </>

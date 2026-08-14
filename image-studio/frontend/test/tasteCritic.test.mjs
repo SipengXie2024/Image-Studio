@@ -233,6 +233,8 @@ test("builds an immutable critic-only request with exact prompt bytes and a stri
   assert.equal(built.responseSchema.additionalProperties, false);
   assert.equal(built.responseSchema.properties.candidates.minItems, built.imageIds.length);
   assert.equal(built.responseSchema.properties.candidates.maxItems, built.imageIds.length);
+  // Strict structured-output validators require an explicit type on every property schema.
+  assert.equal(built.responseSchema.properties.schemaVersion.type, "integer");
 });
 
 test("adds explicit visual exemplars after candidates without turning them into ranked outputs", () => {

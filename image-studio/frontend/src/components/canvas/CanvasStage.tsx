@@ -656,9 +656,9 @@ export function CanvasStage({ reviewCallbacks }: { reviewCallbacks?: BatchReview
         <FeedbackModal
           request={feedbackRequest}
           onClose={() => setFeedbackRequest(null)}
-          onSubmit={async (note) => {
+          onSubmit={async (note, keepSourcePaths) => {
             if (feedbackRequest.kind === "edit") {
-              await activeReviewCallbacks?.onEdit?.({ item: feedbackRequest.item, items: feedbackRequest.items, note });
+              await activeReviewCallbacks?.onEdit?.({ item: feedbackRequest.item, items: feedbackRequest.items, note, keepSourcePaths });
             } else {
               await activeReviewCallbacks?.onReject?.({ items: feedbackRequest.items, note });
             }

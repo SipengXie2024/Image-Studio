@@ -204,7 +204,7 @@ export function BatchResultGrid({
               : criticRunning
                 ? "正在按原提示词与已确认品味评审；不会改写提示词。"
                 : items.some((item) => item.tasteReview)
-                  ? "Top-3 已前置；DQ 只会被淘汰。点击图片只看大图，不会退出或记录选择。"
+                  ? `${reviewProvenanceLabel(items)}Top-3 已前置；DQ 只会被淘汰。点击图片只看大图，不会退出或记录选择。`
                   : "点击图片只看大图；只有“选定”或“全部不满意”才会记录你的选择。"}
           </span>
           {onRejectAll ? (
@@ -216,6 +216,16 @@ export function BatchResultGrid({
       ) : null}
     </div>
   );
+}
+
+// Surfaces what the taste critic actually applied so the user can see the
+// harness learning from their feedback instead of a bare, unexplained score.
+function reviewProvenanceLabel(items: readonly HistoryItem[]): string {
+  const review = items.find((item) => item.tasteReview)?.tasteReview;
+  const rules = review?.appliedRuleCount ?? 0;
+  const exemplars = review?.appliedExemplarCount ?? 0;
+  if (!rules && !exemplars) return "";
+  return `本次评审应用了你确认的 ${rules} 条品味规则与 ${exemplars} 张历史判例。`;
 }
 
 function BatchGridTile({
@@ -283,8 +293,11 @@ function BatchGridTile({
               break;
           }
         }}
+        onDoubleClick={() => {
+          if (!selectionMode && !preview) void onSelect(item);
+        }}
         disabled={preview}
-        title={!preview && onPreview ? "查看大图（不会退出本批）" : undefined}
+        title={!preview && onPreview ? "单击看大图（不退出本批）· 双击进入单图" : undefined}
       >
         <span className="batch-grid-media">
           <img

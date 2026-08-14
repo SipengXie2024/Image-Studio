@@ -8,6 +8,10 @@ export function TasteBootstrapGate() {
   const decide = useStudioStore((state) => state.decideTasteCandidate);
   const acknowledge = useStudioStore((state) => state.acknowledgeTasteBootstrap);
   const close = useStudioStore((state) => state.closeTasteBootstrap);
+  const ruleBusyId = useStudioStore((state) => state.tasteRuleBusyId);
+  const distillRule = useStudioStore((state) => state.distillCandidateRule);
+  const updateRule = useStudioStore((state) => state.updateCandidateRule);
+  const reviseRule = useStudioStore((state) => state.reviseCandidateRule);
   const settingsOpen = useStudioStore((state) => state.settingsOpen);
   const upstreamModalOpen = useStudioStore((state) => state.upstreamModalOpen);
   const appUpdateModalOpen = useStudioStore((state) => state.appUpdateModalOpen);
@@ -18,6 +22,8 @@ export function TasteBootstrapGate() {
     <TasteBootstrapModal
       profile={profile}
       loading={loading}
+      ruleBusyId={ruleBusyId}
+      ruleActions={{ onDistill: distillRule, onUpdateRule: updateRule, onRevise: reviseRule }}
       onDecide={decide}
       onAcknowledge={acknowledge}
       onClose={close}
