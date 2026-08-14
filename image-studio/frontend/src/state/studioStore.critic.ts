@@ -17,7 +17,7 @@ import {
 } from "../lib/tasteCritic.ts";
 import { buildApprovedCriticRulesSnapshot } from "../lib/tasteLearning.ts";
 import { listTasteFeedback, listTasteVisualExemplars } from "../lib/tasteStorage.ts";
-import type { TasteVisualExemplar } from "../lib/tasteCritic.ts";
+import type { TasteCriticHardGate, TasteVisualExemplar } from "../lib/tasteCritic.ts";
 import type { PromptOptimizeRequest, StudioState } from "./studioStore.types.ts";
 import type { HistoryItem, TasteReview } from "../types/domain.ts";
 
@@ -143,6 +143,7 @@ export function createTasteCriticActions(
     async reviewBatchWithTasteCritic(options: {
       items?: HistoryItem[];
       silent?: boolean;
+      hardGateOverride?: TasteCriticHardGate;
     } = {}): Promise<boolean> {
       const initial = store.getState();
       if (initial.tasteCriticRunning) return false;
@@ -206,6 +207,7 @@ export function createTasteCriticActions(
           originalPrompt,
           imageIds: items.map((item) => item.id),
           criticRules: rules,
+          hardGateOverride: options.hardGateOverride,
           visualExemplars: preparedExemplars.map(({ itemId, polarity, eventType, note }) => ({
             itemId,
             polarity,

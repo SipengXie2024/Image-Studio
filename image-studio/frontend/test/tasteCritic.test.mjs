@@ -110,11 +110,104 @@ test("negative constraints against multi-character layouts do not disable a clea
     true,
   );
   assert.equal(
+    critic.classifyTasteCriticHardGate("一名森林弓箭手，角色概念图，不要再加一个对手").enabled,
+    true,
+  );
+  assert.equal(
     critic.classifyTasteCriticHardGate(
       "single elf character, without two elves, no storyboard, without multiple outfit options, do not show outfit options side by side",
     ).enabled,
     true,
   );
+});
+
+test("inherits a reviewed source hard gate for a short edit delta without changing its bytes", () => {
+  const editNote = "  上身和腿部的肌肉量再增加一点\r\n背景纯白  ";
+  const singleSourceGate = critic.classifyTasteCriticHardGate("一名森林弓箭手，角色概念图");
+  const inheritedGate = critic.resolveEditTasteCriticHardGate({
+    editPrompt: editNote,
+    sourceHardGate: singleSourceGate,
+  });
+  const built = request({
+    originalPrompt: editNote,
+    imageIds: ["edit-1"],
+    hardGateOverride: inheritedGate,
+  });
+  const parsed = critic.parseTasteCriticResponse({
+    schemaVersion: 1,
+    candidates: [responseCandidate("edit-1", 95, { multiViewLayout: true })],
+  }, built);
+
+  assert.equal(built.originalPrompt, editNote);
+  assert.deepEqual([...new TextEncoder().encode(built.originalPrompt)], [...new TextEncoder().encode(editNote)]);
+  assert.equal(built.hardGate.enabled, true);
+  assert.equal(parsed.candidates[0].disqualified, true);
+  assert.deepEqual(parsed.candidates[0].disqualificationReasons, ["multi-view-layout"]);
+});
+
+test("keeps the hard gate disabled when a short edit inherits an explicit multi-subject source", () => {
+  const multiSourceGate = critic.classifyTasteCriticHardGate("两个精灵角色概念图");
+  const built = request({
+    originalPrompt: "背景改成纯白",
+    imageIds: ["edit-1"],
+    hardGateOverride: multiSourceGate,
+  });
+  const parsed = critic.parseTasteCriticResponse({
+    schemaVersion: 1,
+    candidates: [responseCandidate("edit-1", 95, { multiplePrimarySubjects: true })],
+  }, built);
+
+  assert.equal(built.hardGate.enabled, false);
+  assert.equal(parsed.candidates[0].disqualified, false);
+});
+
+test("an explicit second-character edit overrides an enabled source hard gate", () => {
+  const sourceGate = critic.classifyTasteCriticHardGate("一名森林弓箭手，角色概念图");
+  const editPrompt = "保留现有角色，再加一个对手站在旁边";
+  const resolved = critic.resolveEditTasteCriticHardGate({
+    editPrompt,
+    sourceHardGate: sourceGate,
+  });
+  const built = request({
+    originalPrompt: editPrompt,
+    imageIds: ["edit-1"],
+    hardGateOverride: resolved,
+  });
+  const parsed = critic.parseTasteCriticResponse({
+    schemaVersion: 1,
+    candidates: [responseCandidate("edit-1", 95, { multiplePrimarySubjects: true })],
+  }, built);
+
+  assert.equal(resolved.enabled, false);
+  assert.equal(parsed.candidates[0].disqualified, false);
+});
+
+test("an explicit additional-view edit also overrides an enabled source hard gate", () => {
+  const sourceGate = critic.classifyTasteCriticHardGate("一名森林弓箭手，角色概念图");
+  const resolved = critic.resolveEditTasteCriticHardGate({
+    editPrompt: "保留正面，再加一个背面视图",
+    sourceHardGate: sourceGate,
+  });
+
+  assert.equal(resolved.enabled, false);
+});
+
+test("does not mistake increasing a character trait for adding another character", () => {
+  const sourceGate = critic.classifyTasteCriticHardGate("一名森林弓箭手，角色概念图");
+  const resolved = critic.resolveEditTasteCriticHardGate({
+    editPrompt: "增加角色的肌肉量和正面光照",
+    sourceHardGate: sourceGate,
+  });
+
+  assert.equal(resolved.enabled, true);
+});
+
+test("runs the critic and replacement loop for ordinary multi-result generate and edit batches", () => {
+  assert.equal(critic.shouldRunTasteCriticLoop("generate", 3, false, false), true);
+  assert.equal(critic.shouldRunTasteCriticLoop("edit", 3, false, false), true);
+  assert.equal(critic.shouldRunTasteCriticLoop("edit", 1, false, false), false);
+  assert.equal(critic.shouldRunTasteCriticLoop("edit", 3, true, false), false);
+  assert.equal(critic.shouldRunTasteCriticLoop("edit", 3, false, true), false);
 });
 
 test("builds an immutable critic-only request with exact prompt bytes and a strict schema", () => {
@@ -156,6 +249,19 @@ test("adds explicit visual exemplars after candidates without turning them into 
   assert.deepEqual(input.tasteExemplarOrder.map((entry) => entry.attachmentPosition), [3, 4]);
   assert.equal(input.tasteExemplarOrder[1].note, "  不要塑料感  ");
   assert.equal(built.responseSchema.properties.candidates.maxItems, 2);
+});
+
+test("treats edit exemplars as baselines with a verbatim required delta", () => {
+  const built = request({
+    visualExemplars: [
+      { itemId: "selected", polarity: "positive", eventType: "edit", note: "  腿部肌肉再明显一点\r\n其他元素不变  " },
+    ],
+  });
+
+  const input = JSON.parse(built.inputText);
+  assert.equal(input.tasteExemplarOrder[0].note, "  腿部肌肉再明显一点\r\n其他元素不变  ");
+  assert.match(built.instructions, /edit exemplar is a selected baseline/i);
+  assert.match(built.instructions, /note as the required change/i);
 });
 
 test("rejects invalid candidate ids and non-critic rule snapshots", () => {

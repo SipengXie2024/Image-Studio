@@ -165,6 +165,56 @@ test("reviews candidates in attachment order, applies approved rules only, and p
   assert.equal(store.getState().tasteCriticError, null);
 });
 
+test("applies an inherited source hard gate to a short incremental edit batch", async () => {
+  const note = "  上身和腿部的肌肉量再增加一点\r\n背景纯白  ";
+  const items = [historyItem("img-1"), historyItem("img-2")].map((item) => ({
+    ...item,
+    mode: "edit",
+    prompt: note,
+    originalPrompt: note,
+    submittedPrompt: note,
+  }));
+  const store = adapter(state({
+    batchResults: items,
+    history: items,
+    currentImage: items[0],
+    resultDetail: items[1],
+    compareB: items[1],
+  }));
+  let optimizerRequest;
+  let persisted;
+  const actions = createTasteCriticActions(store, {
+    listFeedback: async () => [],
+    getStoredAPIKey: async () => "secret",
+    ensureFullItem: async (item) => ({ ...item, imageB64: `base64-${item.id}` }),
+    readImageAsBase64: async () => "",
+    optimizePrompt: async (request) => {
+      optimizerRequest = request;
+      return validResponse();
+    },
+    persistReviews: async (reviewed) => { persisted = reviewed; },
+    isAndroid: () => false,
+  });
+
+  assert.equal(await actions.reviewBatchWithTasteCritic({
+    items,
+    hardGateOverride: {
+      kind: "single-subject-single-view",
+      enabled: true,
+      rationale: "Inherited from the selected source batch.",
+    },
+  }), true);
+
+  const envelope = JSON.parse(optimizerRequest.prompt);
+  assert.equal(envelope.evaluationInput.originalPrompt, note);
+  assert.deepEqual(
+    [...new TextEncoder().encode(envelope.evaluationInput.originalPrompt)],
+    [...new TextEncoder().encode(note)],
+  );
+  assert.equal(envelope.evaluationInput.hardGate.enabled, true);
+  assert.equal(persisted[1].tasteReview.disqualified, true);
+});
+
 test("appends persisted taste images after current candidates without reading them from history", async () => {
   const store = adapter(state());
   let optimizerRequest;

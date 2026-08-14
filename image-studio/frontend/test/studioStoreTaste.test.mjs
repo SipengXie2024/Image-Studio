@@ -30,6 +30,7 @@ function createHarness(options = {}) {
   const calls = {
     selected: [],
     reused: [],
+    submitted: [],
     closed: 0,
     toasts: [],
     feedbackInputs: [],
@@ -45,6 +46,9 @@ function createHarness(options = {}) {
     prompt: options.prompt ?? "prompt must remain untouched",
     mode: "generate",
     currentImage: null,
+    sources: structuredClone(options.sources ?? []),
+    isRunning: false,
+    errorMessage: null,
     batchResults: [...(options.batchResults ?? [])],
     tasteProfile: structuredClone(emptyProfile),
     tasteLoading: false,
@@ -57,9 +61,25 @@ function createHarness(options = {}) {
       calls.reused.push(item.id);
       if (options.reuseError) throw options.reuseError;
       if (!options.reuseSilentlyFails) {
+        const savedPath = item.savedPath ?? `C:\\images\\${item.id}.png`;
         state.mode = "edit";
-        state.currentImage = item;
+        state.currentImage = { ...item, savedPath };
+        if (!state.sources.some((source) => source.path === savedPath)) {
+          state.sources.push({ path: savedPath, name: `${item.id}.png` });
+        }
       }
+    },
+    async submit() {
+      calls.submitted.push({
+        prompt: state.prompt,
+        sources: structuredClone(state.sources),
+      });
+      if (options.submitError) throw options.submitError;
+      if (options.submitDoesNotStart) {
+        state.errorMessage = options.submitErrorMessage ?? "上游配置无效";
+        return;
+      }
+      state.isRunning = true;
     },
     closeResultGrid() {
       calls.closed += 1;
@@ -237,9 +257,12 @@ test("does not save delayed visual feedback into a replacement batch", async () 
 });
 
 test("preserves edit feedback verbatim and only places the user's own edit text in prompt", async () => {
-  const item = historyItem("image-a");
+  const item = historyItem("image-a", { savedPath: "C:\\images\\image-a.png" });
   const note = "  只把弓的纹样加深\r\n其他元素不要动。  ";
-  const harness = createHarness({ batchResults: [item] });
+  const harness = createHarness({
+    batchResults: [item],
+    sources: [{ path: "C:\\images\\old-source.png", name: "old-source.png" }],
+  });
 
   await harness.actions.editBatchResult({ item, items: [item], note });
 
@@ -250,6 +273,46 @@ test("preserves edit feedback verbatim and only places the user's own edit text 
   );
   assert.equal(harness.state.prompt, note);
   assert.deepEqual(harness.calls.reused, ["image-a"]);
+  assert.equal(harness.calls.submitted.length, 1);
+  assert.deepEqual(harness.calls.submitted[0].sources.map((source) => source.path), [item.savedPath]);
+  assert.deepEqual(
+    [...new TextEncoder().encode(harness.calls.submitted[0].prompt)],
+    [...new TextEncoder().encode(note)],
+  );
+  assert.equal(harness.calls.toasts.at(-1)?.kind, "success");
+});
+
+test("keeps saved edit feedback closed when automatic generation cannot start", async () => {
+  const item = historyItem("image-a", { savedPath: "C:\\images\\image-a.png" });
+  const harness = createHarness({
+    batchResults: [item],
+    submitDoesNotStart: true,
+    submitErrorMessage: "未配置图像模型",
+  });
+
+  await harness.actions.editBatchResult({ item, items: [item], note: "只改肌肉量" });
+
+  assert.equal(harness.data.feedback.length, 1);
+  assert.equal(harness.calls.submitted.length, 1);
+  assert.equal(harness.calls.toasts.at(-1)?.kind, "warn");
+  assert.match(harness.calls.toasts.at(-1)?.message ?? "", /无需再次提交反馈/);
+  assert.match(harness.calls.toasts.at(-1)?.message ?? "", /未配置图像模型/);
+});
+
+test("turns an automatic submit exception into a warning after feedback is saved", async () => {
+  const item = historyItem("image-a", { savedPath: "C:\\images\\image-a.png" });
+  const harness = createHarness({
+    batchResults: [item],
+    submitError: new Error("transport unavailable"),
+  });
+
+  await harness.actions.editBatchResult({ item, items: [item], note: "只改肌肉量" });
+
+  assert.equal(harness.data.feedback.length, 1);
+  assert.equal(harness.calls.submitted.length, 1);
+  assert.equal(harness.calls.toasts.at(-1)?.kind, "warn");
+  assert.match(harness.calls.toasts.at(-1)?.message ?? "", /transport unavailable/);
+  assert.match(harness.calls.toasts.at(-1)?.message ?? "", /无需再次提交反馈/);
 });
 
 test("does not append a pick when selecting the image fails", async () => {

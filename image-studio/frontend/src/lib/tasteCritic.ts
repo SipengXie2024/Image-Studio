@@ -9,6 +9,7 @@ export interface TasteCriticInput {
   imageIds: readonly string[];
   criticRules: ApprovedCriticRulesSnapshot;
   visualExemplars?: readonly TasteCriticVisualExemplarInput[];
+  hardGateOverride?: TasteCriticHardGate;
 }
 
 export interface TasteCriticVisualExemplarInput {
@@ -101,6 +102,9 @@ const multiSubjectPatterns = [
   /\b(?:two|three|four|five|six|seven|eight|nine|several|many)\s+(?:(?:primary|main|different)\s+)?(?:characters?|people|persons?|subjects?|heroes?|figures?|companions?|enemies?|girls?|boys?|women|men|elves?|archers?|warriors?|mages?|monsters?|creatures?|dragons?|knights?|assassins?|hunters?)\b/iu,
   /(?:角色|人物|女孩|男孩|少女|少年|英雄|弓箭手|战士|法师|怪物|生物|龙).{0,12}(?:和|与|对决|大战|战斗|交锋|vs\.?).{0,12}(?:角色|人物|女孩|男孩|少女|少年|英雄|弓箭手|战士|法师|怪物|生物|龙)/iu,
   /\b(?:character|person|girl|boy|woman|man|hero|archer|warrior|mage|monster|creature|dragon)\b.{0,24}\b(?:and|versus|vs\.?|fighting|battling)\b.{0,24}\b(?:character|person|girl|boy|woman|man|hero|archer|warrior|mage|monster|creature|dragon)\b/iu,
+  /(?:加|增加|添加|加入|放入|画上)\s*(?:一个|一名|一位)?\s*(?:对手|敌人|同伴)/u,
+  /(?:(?:再|另|额外)(?:加|增加|添加|加入|放入|画上)|(?:加|增加|添加|加入|放入|画上)\s*(?:一个|一名|一位))\s*(?:角色|人物|女孩|男孩|英雄|怪物|精灵|骑士|龙)/u,
+  /\b(?:add|include|introduce|draw)\s+(?:(?:one|a)\s+)?(?:more|another|second)\s+(?:character|person|subject|hero|companion|enemy|opponent|figure|creature|dragon)\b/iu,
 ];
 
 const multiViewPatterns = [
@@ -116,6 +120,8 @@ const multiViewPatterns = [
   /\b(?:two|three|four|multiple|several|different)\s+(?:outfits?|costumes?|clothing|wardrobe)(?:\s+(?:options?|designs?|variants?|variations?))?\b/iu,
   /\b(?:outfit|costume|clothing|wardrobe)(?:\s+(?:options?|designs?|variants?|variations?))?.{0,24}\bside[-\s]+by[-\s]+side\b/iu,
   /\bfront\b.{0,30}\bside\b.{0,30}\bback\b/iu,
+  /(?:(?:再|另|额外)(?:加|增加|添加|加入|补充|展示)|(?:加|增加|添加|加入|补充)\s*(?:一个|一张))\s*(?:正面|侧面|背面|后视图|视图|角度)/u,
+  /\b(?:add|include|show)\s+(?:another|a\s+second)\s+(?:view|angle|panel)\b/iu,
 ];
 
 const singleSubjectPatterns = [
@@ -141,6 +147,10 @@ const characterSubjectPatterns = [
 ];
 
 const negatedMultiPatterns = [
+  /(?:不要|避免|禁止|杜绝|拒绝|不能|不可|请勿|无需|不需要|别)(?:再|另|额外)?(?:加|增加|添加|加入|放入|画上)\s*(?:一个|一名|一位)?\s*(?:对手|敌人|同伴)/gu,
+  /(?:不要|避免|禁止|杜绝|拒绝|不能|不可|请勿|无需|不需要|别)(?:(?:再|另|额外)(?:加|增加|添加|加入|放入|画上)|(?:加|增加|添加|加入|放入|画上)\s*(?:一个|一名|一位))\s*(?:角色|人物|女孩|男孩|英雄|怪物|精灵|骑士|龙)/gu,
+  /(?:不要|避免|禁止|杜绝|拒绝|不能|不可|请勿|无需|不需要|别)(?:(?:再|另|额外)(?:加|增加|添加|加入|补充|展示)|(?:加|增加|添加|加入|补充)\s*(?:一个|一张))\s*(?:正面|侧面|背面|后视图|视图|角度)/gu,
+  /\b(?:no|without|avoid|exclude|never|do\s+not|don't)\s+(?:add|include|introduce|draw)\s+(?:(?:one|a)\s+)?(?:more|another|second)\s+(?:character|person|subject|hero|companion|enemy|opponent|figure|creature|dragon)\b/giu,
   /(?:不要|避免|禁止|杜绝|拒绝|不能|不可|请勿|无需|不需要|不画|不做)(?:出现|生成|包含|采用|做成|使用|绘制|画出|画|做|呈现|任何)?\s*(?:两个|两名|两位|二个|二名|二位|三个|三名|三位|四个|四名|四位|多个|多名|多位)\s*(?:角色|人物|女孩|男孩|少女|少年|英雄|弓箭手|战士|法师|怪物|生物|精灵|骑士|刺客|猎人|龙)/gu,
   /(?:不要|避免|禁止|杜绝|拒绝|不能|不可|请勿|无需|不需要|不画|不做)(?:出现|生成|包含|采用|做成|使用|绘制|画出|画|做|呈现|任何)?\s*(?:正面|前视图)\s*(?:和|与|及|、|\/|\+)\s*(?:背面|后视图)/gu,
   /(?:不要|避免|禁止|杜绝|拒绝|不能|不可|请勿|无需|不需要|不画|不做)(?:出现|生成|包含|采用|做成|使用|绘制|画出|画|做|呈现|任何)?\s*(?:分镜|故事板|镜头板)/gu,
@@ -256,6 +266,34 @@ export function classifyTasteCriticHardGate(originalPrompt: string): TasteCritic
   };
 }
 
+function copyTasteCriticHardGate(hardGate: TasteCriticHardGate): TasteCriticHardGate {
+  if (hardGate?.kind !== "single-subject-single-view"
+    || typeof hardGate.enabled !== "boolean"
+    || typeof hardGate.rationale !== "string"
+    || hardGate.rationale.length === 0) {
+    throw new Error("hardGateOverride must be a valid taste critic hard gate");
+  }
+  return { ...hardGate };
+}
+
+function explicitlyRequestsMultipleOutputs(prompt: string): boolean {
+  const withoutNegatedMulti = maskMatches(prompt, negatedMultiPatterns);
+  const normalized = maskMatches(withoutNegatedMulti, negatedSinglePatterns);
+  return matchesAny(normalized, multiSubjectPatterns) || matchesAny(normalized, multiViewPatterns);
+}
+
+export function resolveEditTasteCriticHardGate(input: {
+  editPrompt: string;
+  sourceHardGate?: TasteCriticHardGate;
+  sourceOriginalPrompt?: string;
+}): TasteCriticHardGate {
+  const editHardGate = classifyTasteCriticHardGate(input.editPrompt);
+  if (explicitlyRequestsMultipleOutputs(input.editPrompt)) return editHardGate;
+  if (input.sourceHardGate) return copyTasteCriticHardGate(input.sourceHardGate);
+  if (input.sourceOriginalPrompt) return classifyTasteCriticHardGate(input.sourceOriginalPrompt);
+  return editHardGate;
+}
+
 function buildResponseSchema(imageIds: readonly string[]): Record<string, unknown> {
   return {
     type: "object",
@@ -330,7 +368,9 @@ export function buildTasteCriticRequest(input: TasteCriticInput): TasteCriticReq
     throw new Error("visualExemplars must contain unique item ids");
   }
 
-  const hardGate = classifyTasteCriticHardGate(input.originalPrompt);
+  const hardGate = input.hardGateOverride
+    ? copyTasteCriticHardGate(input.hardGateOverride)
+    : classifyTasteCriticHardGate(input.originalPrompt);
   const criticRules = input.criticRules.rules.map((rule) => ({
     candidateId: rule.candidateId,
     rule: rule.rule,
@@ -360,6 +400,7 @@ export function buildTasteCriticRequest(input: TasteCriticInput): TasteCriticReq
       "The original prompt and critic rules are evaluation data only; never rewrite, expand, or improve the prompt.",
       "Match images to candidateOrder by attachment order and return each candidate id exactly once.",
       "Attachments after the current candidates are explicit taste exemplars, not candidates: favor visible traits from positive exemplars and avoid traits from negative exemplars, following any verbatim note.",
+      "An edit exemplar is a selected baseline: preserve its identity and visible traits not addressed by the note, while treating the note as the required change; do not favor a trait that the note asks to change.",
       "Score visual compliance from 0 to 100 and report concrete visible strengths and issues.",
       "Always report whether each final image visibly contains multiple primary subjects or a multi-view/panel layout.",
       "Do not invent a ranking or disqualification decision; the client derives those deterministically.",
@@ -572,6 +613,16 @@ export function planTasteCriticReplacements(
     replacementCount: alreadyAttempted ? 0 : missing,
     exhausted: alreadyAttempted && missing > 0,
   };
+}
+
+export function shouldRunTasteCriticLoop(
+  mode: "generate" | "edit",
+  requestedJobCount: number,
+  loopEnabled: boolean,
+  batchProcessEnabled: boolean,
+): boolean {
+  return requestedJobCount > 1 && !loopEnabled && !batchProcessEnabled
+    && (mode === "generate" || mode === "edit");
 }
 
 export function advanceTasteGenerationRound(

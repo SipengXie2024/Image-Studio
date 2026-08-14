@@ -290,6 +290,7 @@ export interface StudioState {
   reviewBatchWithTasteCritic: (options?: {
     items?: HistoryItem[];
     silent?: boolean;
+    hardGateOverride?: import("../lib/tasteCritic").TasteCriticHardGate;
   }) => Promise<boolean>;
   pruneHistoryOlderThanDays: (days: number) => Promise<number>;
   savePreset: (name: string) => string | null;

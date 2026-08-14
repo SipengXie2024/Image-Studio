@@ -323,11 +323,15 @@ export function createTasteActions(
       const context = feedbackContext(input.item, input.items);
       await state.reuseAsSource(input.item);
       const prepared = store.getState();
-      if (prepared.mode !== "edit" || prepared.currentImage?.id !== input.item.id) {
+      const selectedPath = prepared.currentImage?.savedPath;
+      const selectedSource = selectedPath
+        ? prepared.sources.find((source) => source.path === selectedPath)
+        : undefined;
+      if (prepared.mode !== "edit" || prepared.currentImage?.id !== input.item.id || !selectedSource) {
         throw new Error("源图准备失败，请重试后再提交建议");
       }
       assertCurrentFeedbackBatch(input.items, prepared.batchResults);
-      store.setState({ prompt: input.note });
+      store.setState({ prompt: input.note, sources: [selectedSource] });
       const visualExemplars = await captureVisualExemplars([input.item], dependencies);
       assertCurrentFeedbackBatch(input.items, store.getState().batchResults);
       await dependencies.appendFeedback({
@@ -337,8 +341,31 @@ export function createTasteActions(
         note: input.note,
         visualExemplars,
       });
-      if (await refreshAfterFeedback(state)) {
-        state.pushToast("已记录选择与建议，并进入编辑模式", "success", 6000, {
+      const refreshed = await refreshAfterFeedback(state);
+      const beforeSubmit = store.getState();
+      const wasRunning = beforeSubmit.isRunning;
+      try {
+        await beforeSubmit.submit();
+      } catch (error) {
+        store.getState().pushToast(
+          `建议已记录，但自动生图未启动：${error instanceof Error ? error.message : String(error)}。无需再次提交反馈`,
+          "warn",
+          7000,
+        );
+        return;
+      }
+      const submitted = store.getState();
+      if (wasRunning || !submitted.isRunning) {
+        const reason = submitted.errorMessage?.trim();
+        submitted.pushToast(
+          `建议已记录，但自动生图未启动${reason ? `：${reason}` : ""}。无需再次提交反馈`,
+          "warn",
+          7000,
+        );
+        return;
+      }
+      if (refreshed) {
+        submitted.pushToast("已记录选择与建议，正在按建议生成新一批", "success", 6000, {
           label: "确认长期规则",
           onClick: () => store.setState({ tasteBootstrapOpen: true }),
         });

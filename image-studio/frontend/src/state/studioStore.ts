@@ -56,7 +56,13 @@ import {
   Workspace,
 } from "../types/domain";
 import { assertPromptByteIdentity } from "../lib/tasteLearning";
-import { advanceTasteGenerationRound, planTasteCriticReplacements } from "../lib/tasteCritic";
+import {
+  advanceTasteGenerationRound,
+  planTasteCriticReplacements,
+  resolveEditTasteCriticHardGate,
+  shouldRunTasteCriticLoop,
+  type TasteCriticHardGate,
+} from "../lib/tasteCritic";
 import {
   clearLegacyAPIKeys,
   loadLegacyModeAPIKey,
@@ -267,6 +273,7 @@ type TasteReplacementContext = {
   roundTotal: number;
   roundSettled: number;
   roundSucceeded: number;
+  hardGateOverride?: TasteCriticHardGate;
 };
 
 const tasteReplacementContexts = new Map<string, TasteReplacementContext>();
@@ -1533,7 +1540,14 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     for (const [batchId, context] of tasteReplacementContexts) {
       if (context.workspaceId === workspaceId) tasteReplacementContexts.delete(batchId);
     }
-    if (s.mode === "generate" && requestedJobCount > 1 && !loopEnabled && !batchProcessEnabled) {
+    if (shouldRunTasteCriticLoop(s.mode, requestedJobCount, loopEnabled, batchProcessEnabled)) {
+      const hardGateOverride = s.mode === "edit" && s.currentImage
+        ? resolveEditTasteCriticHardGate({
+            editPrompt: s.prompt,
+            sourceHardGate: s.currentImage.tasteReview?.hardGate,
+            sourceOriginalPrompt: s.currentImage.originalPrompt ?? s.currentImage.prompt,
+          })
+        : undefined;
       tasteReplacementContexts.set(snapshotBase.batchId, {
         workspaceId,
         batchId: snapshotBase.batchId,
@@ -1545,6 +1559,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         roundTotal: requestedJobCount,
         roundSettled: 0,
         roundSucceeded: 0,
+        hardGateOverride,
       });
     }
 
@@ -2945,7 +2960,13 @@ async function reviewTasteBatchAndMaybeReplace(batchId: string, items: HistoryIt
     }, 250);
     return;
   }
-  const reviewed = await useStudioStore.getState().reviewBatchWithTasteCritic({ items, silent: true });
+  const context = tasteReplacementContexts.get(batchId);
+  if (!context) return;
+  const reviewed = await useStudioStore.getState().reviewBatchWithTasteCritic({
+    items,
+    silent: true,
+    hardGateOverride: context.hardGateOverride,
+  });
   if (!reviewed) {
     if (useStudioStore.getState().tasteCriticRunning && tasteReplacementContexts.has(batchId)) {
       setTimeout(() => {
@@ -2958,8 +2979,6 @@ async function reviewTasteBatchAndMaybeReplace(batchId: string, items: HistoryIt
     tasteReplacementContexts.delete(batchId);
     return;
   }
-  const context = tasteReplacementContexts.get(batchId);
-  if (!context) return;
   const reviewedItems = useStudioStore.getState().history.filter((item) => item.batchId === batchId);
   const replacementPlan = planTasteCriticReplacements(context.initialCount, reviewedItems, context.attempted);
   const replacementCount = replacementPlan.replacementCount;
