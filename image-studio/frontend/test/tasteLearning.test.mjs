@@ -234,3 +234,72 @@ test("approved induced rules enter the critic snapshot with their own source typ
     sourceType: "induced",
   }]);
 });
+
+test("curated merge proposals become pending candidates; retire proposals do not", () => {
+  const replaces = [
+    { candidateId: "taste-a", rule: "评审时优先冷色调" },
+    { candidateId: "taste-b", rule: "评审时压低暖色" },
+  ];
+  const candidate = taste.curatedProposalToTasteCandidate({
+    id: "curation-1",
+    action: "merge",
+    rule: "  评审时保持  冷色调基调  ",
+    replaces,
+    reason: "  两条规则重叠  ",
+  });
+
+  assert.equal(candidate.status, "pending");
+  assert.equal(candidate.target, "critic");
+  assert.equal(candidate.rule, "评审时保持 冷色调基调");
+  assert.deepEqual(candidate.source, {
+    type: "curated",
+    proposalId: "curation-1",
+    replaces,
+    reason: "两条规则重叠",
+    inference: "ai-curated",
+  });
+
+  // Same merged text re-proposed later maps onto the same candidate id, so an
+  // earlier reject keeps suppressing it.
+  const reProposed = taste.curatedProposalToTasteCandidate({
+    id: "curation-9",
+    action: "merge",
+    rule: "评审时保持 冷色调基调",
+    replaces: [replaces[0]],
+  });
+  assert.equal(reProposed.id, candidate.id);
+  assert.equal("reason" in reProposed.source, false);
+
+  assert.equal(
+    taste.curatedProposalToTasteCandidate({ id: "curation-2", action: "retire", rule: null, replaces: [replaces[0]] }),
+    null,
+  );
+  assert.equal(
+    taste.curatedProposalToTasteCandidate({ id: "curation-3", action: "merge", rule: "   ", replaces }),
+    null,
+  );
+});
+
+test("approved curated rules enter the critic snapshot with their own source type", () => {
+  const curated = taste.curatedProposalToTasteCandidate({
+    id: "curation-1",
+    action: "merge",
+    rule: "评审时保持冷色调基调",
+    replaces: [{ candidateId: "taste-a", rule: "评审时优先冷色调" }],
+  });
+  const snapshot = taste.buildApprovedCriticRulesSnapshot([
+    { ...curated, status: "approved" },
+  ]);
+
+  assert.deepEqual(snapshot.rules, [{
+    candidateId: curated.id,
+    rule: "评审时保持冷色调基调",
+    sourceType: "curated",
+  }]);
+});
+
+test("canonicalRuleText matches the normalization used for candidate identity", () => {
+  assert.equal(taste.canonicalRuleText("  评审时优先  冷色调  "), taste.canonicalRuleText("评审时优先 冷色调"));
+  assert.equal(taste.canonicalRuleText("Prefer COOL tones"), taste.canonicalRuleText("prefer cool tones"));
+  assert.equal(taste.canonicalRuleText(null), "");
+});

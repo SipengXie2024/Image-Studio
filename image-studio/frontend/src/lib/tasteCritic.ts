@@ -224,7 +224,8 @@ function validateCriticRules(snapshot: ApprovedCriticRulesSnapshot): void {
   for (const rule of snapshot.rules) {
     const id = cleanID(rule.candidateId);
     if (!id || !cleanID(rule.rule)) throw new Error("critic rules require non-empty ids and text");
-    if (rule.sourceType !== "history" && rule.sourceType !== "feedback" && rule.sourceType !== "induced") {
+    if (rule.sourceType !== "history" && rule.sourceType !== "feedback"
+      && rule.sourceType !== "induced" && rule.sourceType !== "curated") {
       throw new Error("critic rules require a valid source type");
     }
     if (ids.has(id)) throw new Error(`duplicate critic rule id: ${id}`);

@@ -24,7 +24,8 @@ function createHarness(options = {}) {
     feedback: [],
     decisions: [],
     inducedProposals: [...(options.inducedProposals ?? [])],
-    profile: null,
+    curationProposals: [...(options.curationProposals ?? [])],
+    profile: options.savedProfile ? structuredClone(options.savedProfile) : null,
     bootstrapState: null,
     clock: options.clock ?? 100,
   };
@@ -140,6 +141,9 @@ function createHarness(options = {}) {
     },
     async listInducedProposals() {
       return structuredClone(data.inducedProposals);
+    },
+    async listCurationProposals() {
+      return structuredClone(data.curationProposals);
     },
     async readProfile() {
       return data.profile === null ? null : structuredClone(data.profile);
@@ -610,4 +614,185 @@ test("pending induced candidates survive profile rebuilds and honor later decisi
   await harness.actions.refreshTasteProfile();
   const third = harness.data.profile.candidates.find((entry) => entry.id === first.id);
   assert.equal(third.status, "approved");
+});
+
+const { curatedProposalToTasteCandidate, inducedProposalToTasteCandidate } = await import("../src/lib/tasteLearning.ts");
+
+function approvedInducedCandidate(proposalId, rule) {
+  return { ...inducedProposalToTasteCandidate({ id: proposalId, rule }), status: "approved" };
+}
+
+test("curated merge proposals surface as pending candidates and survive rebuilds; retire proposals never do", async () => {
+  const ruleA = approvedInducedCandidate("p-a", "评审时优先冷色调");
+  const ruleB = approvedInducedCandidate("p-b", "评审时压低暖色");
+  const harness = createHarness({
+    savedProfile: {
+      schemaVersion: 1,
+      candidates: [ruleA, ruleB],
+      approvedCandidateIds: [ruleA.id, ruleB.id],
+      updatedAt: 1,
+      bootstrapAcknowledged: true,
+    },
+    curationProposals: [
+      {
+        id: "curation-1",
+        action: "merge",
+        rule: "评审时保持冷色调基调,避免暖色偏移",
+        replaces: [
+          { candidateId: ruleA.id, rule: ruleA.rule },
+          { candidateId: ruleB.id, rule: ruleB.rule },
+        ],
+        reason: "两条规则重叠",
+        createdAt: 60,
+      },
+      {
+        id: "curation-2",
+        action: "retire",
+        rule: null,
+        replaces: [{ candidateId: ruleA.id, rule: ruleA.rule }],
+        reason: "与另一条重复",
+        createdAt: 61,
+      },
+    ],
+  });
+
+  await harness.actions.refreshTasteProfile();
+  const curated = harness.data.profile.candidates.find((entry) => entry.source.type === "curated");
+  assert.ok(curated, "merge proposal should surface as a candidate");
+  assert.equal(curated.status, "pending");
+  assert.equal(curated.source.proposalId, "curation-1");
+  assert.deepEqual(
+    curated.source.replaces.map((entry) => entry.candidateId).sort(),
+    [ruleA.id, ruleB.id].sort(),
+  );
+  assert.equal(curated.source.reason, "两条规则重叠");
+  // Exactly one curated candidate: the retire proposal must not create one.
+  assert.equal(
+    harness.data.profile.candidates.filter((entry) => entry.source.type === "curated").length,
+    1,
+  );
+
+  await harness.actions.refreshTasteProfile();
+  assert.ok(
+    harness.data.profile.candidates.some((entry) => entry.id === curated.id && entry.status === "pending"),
+    "pending curated candidate must survive the rebuild",
+  );
+});
+
+test("approving a curated merge appends the approval first, then retires each replaced approved rule", async () => {
+  const ruleA = approvedInducedCandidate("p-a", "评审时优先冷色调");
+  const ruleB = approvedInducedCandidate("p-b", "评审时压低暖色");
+  const merged = curatedProposalToTasteCandidate({
+    id: "curation-1",
+    action: "merge",
+    rule: "评审时保持冷色调基调,避免暖色偏移",
+    replaces: [
+      { candidateId: ruleA.id, rule: ruleA.rule },
+      { candidateId: ruleB.id, rule: ruleB.rule },
+    ],
+    reason: "重叠",
+  });
+  const harness = createHarness({
+    savedProfile: {
+      schemaVersion: 1,
+      candidates: [ruleA, ruleB],
+      approvedCandidateIds: [ruleA.id, ruleB.id],
+      updatedAt: 1,
+      bootstrapAcknowledged: true,
+    },
+    curationProposals: [{
+      id: "curation-1",
+      action: "merge",
+      rule: merged.rule,
+      replaces: merged.source.replaces,
+      reason: "重叠",
+      createdAt: 60,
+    }],
+  });
+
+  await harness.actions.refreshTasteProfile();
+  await harness.actions.decideTasteCandidate(merged.id, "approve");
+
+  assert.deepEqual(
+    harness.data.decisions.map((entry) => [entry.candidateId, entry.decision]),
+    [
+      [merged.id, "approve"],
+      [ruleA.id, "reject"],
+      [ruleB.id, "reject"],
+    ],
+    "approval must land before the replaced rules are retired",
+  );
+  const profile = harness.data.profile;
+  assert.equal(profile.candidates.find((entry) => entry.id === merged.id).status, "approved");
+  assert.equal(profile.candidates.find((entry) => entry.id === ruleA.id).status, "rejected");
+  assert.equal(profile.candidates.find((entry) => entry.id === ruleB.id).status, "rejected");
+});
+
+test("curated approval skips replaced rules that are no longer approved", async () => {
+  const ruleA = approvedInducedCandidate("p-a", "评审时优先冷色调");
+  const ruleB = { ...inducedProposalToTasteCandidate({ id: "p-b", rule: "评审时压低暖色" }), status: "pending" };
+  const merged = curatedProposalToTasteCandidate({
+    id: "curation-1",
+    action: "merge",
+    rule: "评审时保持冷色调基调",
+    replaces: [
+      { candidateId: ruleA.id, rule: ruleA.rule },
+      { candidateId: ruleB.id, rule: ruleB.rule },
+    ],
+  });
+  const harness = createHarness({
+    savedProfile: {
+      schemaVersion: 1,
+      candidates: [ruleA],
+      approvedCandidateIds: [ruleA.id],
+      updatedAt: 1,
+      bootstrapAcknowledged: true,
+    },
+    inducedProposals: [{ id: "p-b", rule: "评审时压低暖色", evidence: null, createdAt: 40 }],
+    curationProposals: [{
+      id: "curation-1",
+      action: "merge",
+      rule: merged.rule,
+      replaces: merged.source.replaces,
+      reason: null,
+      createdAt: 60,
+    }],
+  });
+
+  await harness.actions.refreshTasteProfile();
+  await harness.actions.decideTasteCandidate(merged.id, "approve");
+
+  assert.deepEqual(
+    harness.data.decisions.map((entry) => [entry.candidateId, entry.decision]),
+    [
+      [merged.id, "approve"],
+      [ruleA.id, "reject"],
+    ],
+    "a pending replaced rule must not receive a reject decision",
+  );
+});
+
+test("warns when an approval pushes the approved rule count past the budget", async () => {
+  const bulk = Array.from({ length: 12 }, (_, index) => (
+    approvedInducedCandidate(`bulk-${index}`, `评审规则占位第${index}条,内容各不相同`)
+  ));
+  const harness = createHarness({
+    savedProfile: {
+      schemaVersion: 1,
+      candidates: bulk,
+      approvedCandidateIds: bulk.map((entry) => entry.id),
+      updatedAt: 1,
+      bootstrapAcknowledged: true,
+    },
+    inducedProposals: [{ id: "p-new", rule: "评审时检查构图重心", evidence: null, createdAt: 40 }],
+  });
+  const fresh = inducedProposalToTasteCandidate({ id: "p-new", rule: "评审时检查构图重心" });
+
+  await harness.actions.refreshTasteProfile();
+  await harness.actions.decideTasteCandidate(fresh.id, "approve");
+
+  assert.ok(
+    harness.calls.toasts.some((toast) => toast.kind === "warn" && toast.message.includes("预算")),
+    "crossing the budget must surface the curation nudge",
+  );
 });

@@ -809,6 +809,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   tasteRuleBusyId: null,
   editNoteRefining: false,
   tastePanelOpen: false,
+  ruleCuration: null,
 
   tool: "pan",
   brushSize: 30,
@@ -2356,6 +2357,19 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   distillCandidateRule: async (candidateId) => tasteRuleActions.distillCandidateRule(candidateId),
   reviseCandidateRule: async (candidateId, instruction) => tasteRuleActions.reviseCandidateRule(candidateId, instruction),
   induceRulesFromHistory: async () => tasteRuleActions.induceRulesFromHistory(),
+  curateRules: async () => tasteRuleActions.curateRules(),
+  settleRuleCurationItem: (key) => {
+    const current = get().ruleCuration;
+    if (!current) return;
+    const items = current.items.filter((item) => item.key !== key);
+    if (items.length > 0) {
+      set({ ruleCuration: { items } });
+      return;
+    }
+    set({ ruleCuration: null });
+    get().pushToast("规则库整理完成;所有变化都已按你的决定生效", "success", 5000);
+  },
+  closeRuleCuration: () => set({ ruleCuration: null }),
   openTastePanel: () => set({ tastePanelOpen: true }),
   closeTastePanel: () => set({ tastePanelOpen: false }),
   pruneHistoryOlderThanDays: async (days) => mediaActions.pruneHistoryOlderThanDays(days),

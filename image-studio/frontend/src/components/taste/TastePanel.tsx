@@ -3,7 +3,8 @@ import { ChevronDown, ChevronRight, Loader2, Sparkles } from "lucide-react";
 import { Modal } from "../common/Modal";
 import { TasteRuleCard } from "./TasteRuleCard";
 import { useStudioStore } from "../../state/studioStore";
-import { INDUCE_FROM_HISTORY_BUSY_ID } from "../../state/studioStore.tasteRules";
+import { CURATE_RULES_BUSY_ID, INDUCE_FROM_HISTORY_BUSY_ID } from "../../state/studioStore.tasteRules";
+import { RULE_BUDGET, RULE_BUDGET_WARN_AT } from "../../lib/ruleCuration";
 import { computeSuggestionAdoptionStats } from "../../lib/tasteInsights";
 import {
   listTasteFeedback,
@@ -49,7 +50,9 @@ export function TastePanel({ onClose }: { onClose: () => void }) {
   const updateRule = useStudioStore((state) => state.updateCandidateRule);
   const reviseRule = useStudioStore((state) => state.reviseCandidateRule);
   const induceRules = useStudioStore((state) => state.induceRulesFromHistory);
+  const curateRules = useStudioStore((state) => state.curateRules);
   const inducing = ruleBusyId === INDUCE_FROM_HISTORY_BUSY_ID;
+  const curating = ruleBusyId === CURATE_RULES_BUSY_ID;
 
   const [tab, setTab] = useState<PanelTab>("rules");
   const [loadError, setLoadError] = useState("");
@@ -84,6 +87,7 @@ export function TastePanel({ onClose }: { onClose: () => void }) {
       const relevant = profile.candidates.filter((candidate) => (
         candidate.source.type === "feedback"
         || candidate.source.type === "induced"
+        || candidate.source.type === "curated"
         || candidate.source.signal === "style-tag"
         || candidate.source.signal === "negative-prompt"
       ));
@@ -227,6 +231,26 @@ export function TastePanel({ onClose }: { onClose: () => void }) {
             </p>
           ) : (
             <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="taste-list-item-meta">
+                  生效规则 {approvedCount} / {RULE_BUDGET} 条预算;规则越多,单条在评审与草稿里的权重越被稀释。
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void curateRules()}
+                  disabled={ruleBusyId !== null || approvedCount < 2}
+                  title="让 AI 提议合并重叠规则、废弃过时规则;每条提案都由你在弹窗里逐条决定"
+                  className="taste-btn taste-btn-ghost taste-btn-sm"
+                >
+                  {curating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {curating ? "正在整理…" : "整理规则库"}
+                </button>
+              </div>
+              {approvedCount >= RULE_BUDGET_WARN_AT ? (
+                <p className="taste-budget-banner">
+                  规则数接近预算上限({approvedCount}/{RULE_BUDGET})。建议「整理规则库」:AI 会提议合并重叠项,是否采纳仍由你逐条决定。
+                </p>
+              ) : null}
               <p className="taste-list-item-meta">
                 这些规则正在参与每次评审。建议让每条都经过「AI 提炼」或本人修改——原话模板的执行效果最弱。
               </p>

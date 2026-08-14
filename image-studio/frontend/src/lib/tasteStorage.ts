@@ -1,6 +1,6 @@
 export const TASTE_DB_NAME = "image-studio-taste";
 
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const FEEDBACK_STORE = "feedbackEvents";
 const DECISION_STORE = "candidateDecisions";
 const DOCUMENT_STORE = "documents";
@@ -8,6 +8,7 @@ const VISUAL_EXEMPLAR_STORE = "visualExemplars";
 const PROMPT_SUGGESTION_STORE = "promptSuggestionDecisions";
 const SUGGESTION_OUTCOME_STORE = "suggestionOutcomes";
 const INDUCED_RULE_STORE = "inducedRuleProposals";
+const RULE_CURATION_STORE = "ruleCurationProposals";
 const CREATED_AT_INDEX = "createdAt";
 const PROFILE_KEY = "profile";
 const STATE_KEY = "state";
@@ -136,6 +137,36 @@ export interface InducedRuleProposal {
   createdAt: number;
 }
 
+// AI curation proposals over the approved rule set. Like induced proposals,
+// these are a fact table so pending merge candidates survive profile rebuilds.
+// `replaces` records both the exact rule text the AI quoted and the candidate
+// id it matched at proposal time — rule text can be polished later, so the id
+// is the durable reference while the text stays as the audit trail.
+export type RuleCurationAction = "merge" | "retire";
+
+export interface RuleCurationReplacedRule {
+  candidateId: string;
+  rule: string;
+}
+
+export interface RuleCurationProposalInput {
+  id?: string;
+  action: RuleCurationAction;
+  rule?: string | null;
+  replaces: readonly RuleCurationReplacedRule[];
+  reason?: string | null;
+  createdAt?: number;
+}
+
+export interface RuleCurationProposal {
+  id: string;
+  action: RuleCurationAction;
+  rule: string | null;
+  replaces: RuleCurationReplacedRule[];
+  reason: string | null;
+  createdAt: number;
+}
+
 export type TasteJsonPrimitive = string | number | boolean | null;
 export type TasteJsonValue = TasteJsonPrimitive | TasteJsonValue[] | TasteJsonObject;
 export interface TasteJsonObject {
@@ -156,6 +187,8 @@ export interface TasteStorage {
   listSuggestionOutcomes(): Promise<PromptSuggestionOutcome[]>;
   appendInducedRuleProposal(input: InducedRuleProposalInput): Promise<InducedRuleProposal>;
   listInducedRuleProposals(): Promise<InducedRuleProposal[]>;
+  appendRuleCurationProposal(input: RuleCurationProposalInput): Promise<RuleCurationProposal>;
+  listRuleCurationProposals(): Promise<RuleCurationProposal[]>;
   listRecentFeedback(limit: number): Promise<TasteFeedbackEvent[]>;
   listRecentPromptSuggestionDecisions(limit: number): Promise<PromptSuggestionDecision[]>;
   readProfile<T = TasteProfile>(): Promise<T | null>;
@@ -336,6 +369,36 @@ export function serializeInducedRuleProposal(
   };
 }
 
+export function serializeRuleCurationProposal(
+  input: RuleCurationProposalInput,
+  defaults: SerializationDefaults = {},
+): RuleCurationProposal {
+  if (input.action !== "merge" && input.action !== "retire") {
+    throw new TypeError("action must be merge or retire");
+  }
+  if (!Array.isArray(input.replaces)) throw new TypeError("replaces must be an array");
+  const replaces = input.replaces.map((entry) => ({
+    candidateId: requiredString(entry?.candidateId, "replaces entry candidateId"),
+    rule: requiredString(entry?.rule, "replaces entry rule"),
+  }));
+  const rule = input.rule ?? null;
+  if (input.action === "merge") {
+    requiredString(rule, "rule");
+    if (replaces.length < 1) throw new TypeError("merge proposals must replace at least one rule");
+  } else {
+    if (rule !== null) throw new TypeError("retire proposals must not carry a rule");
+    if (replaces.length !== 1) throw new TypeError("retire proposals must target exactly one rule");
+  }
+  return {
+    id: requiredString(input.id ?? defaults.id ?? newRecordId("curation"), "id"),
+    action: input.action,
+    rule,
+    replaces,
+    reason: optionalString(input.reason, "reason"),
+    createdAt: timestamp(input.createdAt ?? defaults.createdAt ?? Date.now(), "createdAt"),
+  };
+}
+
 function isForbiddenDocumentKey(key: string): boolean {
   const normalized = key.replace(/[^a-z0-9]/gi, "").toLowerCase();
   return normalized === "authorization"
@@ -442,6 +505,9 @@ export function createTasteStorage(indexedDBFactory?: IDBFactory): TasteStorage 
         }
         if (!database.objectStoreNames.contains(INDUCED_RULE_STORE)) {
           database.createObjectStore(INDUCED_RULE_STORE, { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains(RULE_CURATION_STORE)) {
+          database.createObjectStore(RULE_CURATION_STORE, { keyPath: "id" });
         }
         const upgradeTransaction = request.transaction;
         if (upgradeTransaction) {
@@ -621,6 +687,17 @@ export function createTasteStorage(indexedDBFactory?: IDBFactory): TasteStorage 
       const proposals = await getAllRecords<InducedRuleProposal>(INDUCED_RULE_STORE);
       return proposals.map((proposal) => ({ ...proposal })).sort(compareRecords);
     },
+    async appendRuleCurationProposal(input) {
+      const proposal = serializeRuleCurationProposal(input);
+      await addRecord(RULE_CURATION_STORE, proposal);
+      return proposal;
+    },
+    async listRuleCurationProposals() {
+      const proposals = await getAllRecords<RuleCurationProposal>(RULE_CURATION_STORE);
+      return proposals
+        .map((proposal) => ({ ...proposal, replaces: proposal.replaces.map((entry) => ({ ...entry })) }))
+        .sort(compareRecords);
+    },
     async listRecentFeedback(limit) {
       const events = await getRecentRecords<TasteFeedbackEvent>(FEEDBACK_STORE, limit);
       return events.map((event) => ({ ...event, imageIds: [...event.imageIds] }));
@@ -701,6 +778,16 @@ export function appendTasteInducedRuleProposal(
 
 export function listTasteInducedRuleProposals(): Promise<InducedRuleProposal[]> {
   return getDefaultStorage().listInducedRuleProposals();
+}
+
+export function appendTasteRuleCurationProposal(
+  input: RuleCurationProposalInput,
+): Promise<RuleCurationProposal> {
+  return getDefaultStorage().appendRuleCurationProposal(input);
+}
+
+export function listTasteRuleCurationProposals(): Promise<RuleCurationProposal[]> {
+  return getDefaultStorage().listRuleCurationProposals();
 }
 
 export function listRecentTasteFeedback(limit: number): Promise<TasteFeedbackEvent[]> {

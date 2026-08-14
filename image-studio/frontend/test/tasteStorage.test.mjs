@@ -502,3 +502,88 @@ test("appends induced rule proposals append-only and lists them oldest-first", a
   assert.equal(proposals[0].evidence, "多条 reject 提到");
   assert.equal(proposals[1].evidence, null);
 });
+
+test("serializes rule curation proposals and enforces merge/retire invariants", () => {
+  const merge = taste.serializeRuleCurationProposal({
+    action: "merge",
+    rule: "合并后的规则",
+    replaces: [
+      { candidateId: "taste-1", rule: "规则 A" },
+      { candidateId: "taste-2", rule: "规则 B" },
+    ],
+    reason: "重叠",
+    createdAt: 5,
+  });
+  assert.match(merge.id, /^curation-/);
+  assert.equal(merge.action, "merge");
+  assert.equal(merge.rule, "合并后的规则");
+  assert.equal(merge.replaces.length, 2);
+  assert.equal(merge.reason, "重叠");
+
+  const retire = taste.serializeRuleCurationProposal({
+    action: "retire",
+    replaces: [{ candidateId: "taste-1", rule: "规则 A" }],
+    createdAt: 6,
+  });
+  assert.equal(retire.rule, null);
+  assert.equal(retire.reason, null);
+
+  assert.throws(() => taste.serializeRuleCurationProposal({ action: "delete", replaces: [] }), /action/);
+  assert.throws(
+    () => taste.serializeRuleCurationProposal({ action: "merge", rule: "", replaces: [{ candidateId: "a", rule: "b" }] }),
+    /rule/,
+  );
+  assert.throws(
+    () => taste.serializeRuleCurationProposal({ action: "merge", rule: "ok", replaces: [] }),
+    /at least one/,
+  );
+  assert.throws(
+    () => taste.serializeRuleCurationProposal({ action: "retire", rule: "带文本", replaces: [{ candidateId: "a", rule: "b" }] }),
+    /must not carry/,
+  );
+  assert.throws(
+    () => taste.serializeRuleCurationProposal({
+      action: "retire",
+      replaces: [{ candidateId: "a", rule: "b" }, { candidateId: "c", rule: "d" }],
+    }),
+    /exactly one/,
+  );
+  assert.throws(
+    () => taste.serializeRuleCurationProposal({ action: "merge", rule: "ok", replaces: [{ candidateId: "", rule: "b" }] }),
+    /candidateId/,
+  );
+});
+
+test("appends rule curation proposals append-only and lists them oldest-first", async () => {
+  const storage = taste.createTasteStorage(createMemoryIndexedDB());
+
+  await storage.appendRuleCurationProposal({
+    id: "curation-b",
+    action: "retire",
+    replaces: [{ candidateId: "taste-1", rule: "规则 A" }],
+    createdAt: 20,
+  });
+  await storage.appendRuleCurationProposal({
+    id: "curation-a",
+    action: "merge",
+    rule: "合并后的规则",
+    replaces: [{ candidateId: "taste-1", rule: "规则 A" }],
+    reason: "重叠",
+    createdAt: 10,
+  });
+  await assert.rejects(
+    storage.appendRuleCurationProposal({
+      id: "curation-a",
+      action: "merge",
+      rule: "重复写入",
+      replaces: [{ candidateId: "taste-1", rule: "规则 A" }],
+      createdAt: 30,
+    }),
+    /duplicate key/,
+  );
+
+  const proposals = await storage.listRuleCurationProposals();
+  assert.deepEqual(proposals.map((proposal) => proposal.id), ["curation-a", "curation-b"]);
+  assert.equal(proposals[0].rule, "合并后的规则");
+  assert.equal(proposals[1].action, "retire");
+});

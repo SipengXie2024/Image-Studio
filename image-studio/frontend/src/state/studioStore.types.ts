@@ -58,7 +58,7 @@ export interface ModeConfig {
 export interface PromptOptimizeRequest {
   apiKey: string;
   prompt: string;
-  mode: Mode | "describe" | "critic" | "suggest" | "distill-rule" | "revise-rule" | "refine-note" | "induce-rules";
+  mode: Mode | "describe" | "critic" | "suggest" | "distill-rule" | "revise-rule" | "refine-note" | "induce-rules" | "curate-rules";
   baseURL: string;
   textModelID: string;
   proxyMode: ProxyMode;
@@ -166,6 +166,9 @@ export interface StudioState {
   tasteRuleBusyId: string | null;
   editNoteRefining: boolean;
   tastePanelOpen: boolean;
+  // Pending AI curation proposals awaiting the user's explicit per-item
+  // decisions in the review modal; null when no review is open.
+  ruleCuration: import("../lib/ruleCuration").RuleCurationReview | null;
   tool: "pan" | "mask" | "annotate";
   brushSize: number;
   brushMode: "paint" | "erase";
@@ -310,6 +313,9 @@ export interface StudioState {
   distillCandidateRule: (candidateId: string) => Promise<void>;
   reviseCandidateRule: (candidateId: string, instruction: string) => Promise<void>;
   induceRulesFromHistory: () => Promise<void>;
+  curateRules: () => Promise<void>;
+  settleRuleCurationItem: (key: string) => void;
+  closeRuleCuration: () => void;
   refineEditNote: (input: { note: string; originalPrompt: string }) => Promise<string | null>;
   openTastePanel: () => void;
   closeTastePanel: () => void;

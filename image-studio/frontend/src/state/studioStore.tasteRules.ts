@@ -3,18 +3,23 @@ import { readRuntimePlatformState } from "../platform/index.ts";
 import { aiChannelFailureMessage, resolveAIChannel } from "../lib/aiChannel.ts";
 import { parsePromptSuggestionResponse } from "../lib/promptSuggestion.ts";
 import { buildRuleInductionRequestText, parseRuleInductionResponse } from "../lib/ruleInduction.ts";
+import { buildRuleCurationRequestText, parseRuleCurationResponse } from "../lib/ruleCuration.ts";
 import {
   appendTasteInducedRuleProposal,
+  appendTasteRuleCurationProposal,
   listTasteFeedback,
   listTastePromptSuggestionDecisions,
   writeTasteProfile,
 } from "../lib/tasteStorage.ts";
-import { inducedProposalToTasteCandidate } from "../lib/tasteLearning.ts";
+import { canonicalRuleText, curatedProposalToTasteCandidate, inducedProposalToTasteCandidate } from "../lib/tasteLearning.ts";
 import type { TasteCandidate } from "../lib/tasteLearning.ts";
+import type { RuleCurationReviewItem } from "../lib/ruleCuration.ts";
 import type {
   InducedRuleProposal,
   InducedRuleProposalInput,
   PromptSuggestionDecision,
+  RuleCurationProposal,
+  RuleCurationProposalInput,
   TasteFeedbackEvent,
 } from "../lib/tasteStorage.ts";
 import type { PromptOptimizeRequest, StudioState, TasteProfileState } from "./studioStore.types.ts";
@@ -31,6 +36,7 @@ export interface TasteRuleActionDependencies {
   listFeedback: () => Promise<TasteFeedbackEvent[]>;
   listSuggestionDecisions: () => Promise<PromptSuggestionDecision[]>;
   appendInducedProposal: (input: InducedRuleProposalInput) => Promise<InducedRuleProposal>;
+  appendCurationProposal: (input: RuleCurationProposalInput) => Promise<RuleCurationProposal>;
   isAndroid: () => boolean;
   now: () => number;
 }
@@ -42,6 +48,7 @@ const defaultDependencies: TasteRuleActionDependencies = {
   listFeedback: listTasteFeedback,
   listSuggestionDecisions: listTastePromptSuggestionDecisions,
   appendInducedProposal: appendTasteInducedRuleProposal,
+  appendCurationProposal: appendTasteRuleCurationProposal,
   isAndroid: () => readRuntimePlatformState().isAndroid,
   now: Date.now,
 };
@@ -50,6 +57,8 @@ const defaultDependencies: TasteRuleActionDependencies = {
 // tasteRuleBusyId so per-candidate actions stay disabled while the AI reads
 // the history.
 export const INDUCE_FROM_HISTORY_BUSY_ID = "induce-from-history";
+// Same idea for the rule-curation run over the approved set.
+export const CURATE_RULES_BUSY_ID = "curate-rules";
 
 function candidateNote(candidate: TasteCandidate): string {
   return candidate.source.type === "feedback"
@@ -99,7 +108,7 @@ export function createTasteRuleActions(
   }
 
   async function callRuleChannel(
-    mode: "distill-rule" | "revise-rule" | "induce-rules",
+    mode: "distill-rule" | "revise-rule" | "induce-rules" | "curate-rules",
     requestText: string,
   ): Promise<string | null> {
     const state = store.getState();
@@ -268,6 +277,148 @@ export function createTasteRuleActions(
       } catch (error) {
         store.getState().pushToast(
           `从历史学习失败:${error instanceof Error ? error.message : String(error)}`,
+          "error",
+          6000,
+        );
+      } finally {
+        store.setState({ tasteRuleBusyId: null });
+      }
+    },
+
+    // Ask the AI to propose merges/retirements over the approved rule set,
+    // then hand every surviving proposal to the explicit review modal — the
+    // user decides each one, and nothing changes until they do.
+    async curateRules(): Promise<void> {
+      const initial = store.getState();
+      if (initial.tasteRuleBusyId) return;
+      const approved = initial.tasteProfile.candidates.filter((candidate) => candidate.status === "approved");
+      if (approved.length < 2) {
+        initial.pushToast("生效规则不足两条,还不需要整理", "warn", 5000);
+        return;
+      }
+      store.setState({ tasteRuleBusyId: CURATE_RULES_BUSY_ID });
+      try {
+        const feedback = await dependencies.listFeedback();
+        const profile = store.getState().tasteProfile;
+        const requestText = buildRuleCurationRequestText({
+          approvedRules: approved.map((candidate) => candidate.rule),
+          rejectedRules: profile.candidates
+            .filter((candidate) => candidate.status === "rejected")
+            .map((candidate) => candidate.rule),
+          feedback: feedback.filter((event) => (event.note ?? "").trim() !== ""),
+        });
+        const responseText = await callRuleChannel("curate-rules", requestText);
+        if (responseText === null) return;
+        const drafts = parseRuleCurationResponse(responseText);
+        if (drafts.length === 0) {
+          store.getState().pushToast("AI 认为当前规则库已经足够紧凑,没有整理建议", "success", 6000);
+          return;
+        }
+
+        // Match the AI-quoted replaces texts back onto approved candidates.
+        // A proposal citing any rule we cannot match is dropped whole — a
+        // hallucinated quote must never retire a real rule.
+        const approvedByCanonical = new Map<string, TasteCandidate>();
+        for (const candidate of approved) {
+          const key = canonicalRuleText(candidate.rule);
+          if (!approvedByCanonical.has(key)) approvedByCanonical.set(key, candidate);
+        }
+        const existingById = new Map(profile.candidates.map((candidate) => [candidate.id, candidate]));
+        const items: RuleCurationReviewItem[] = [];
+        const seenKeys = new Set<string>();
+        let droppedUnmatched = 0;
+        for (const draft of drafts) {
+          const matched: { candidateId: string; rule: string }[] = [];
+          const matchedIds = new Set<string>();
+          let unmatched = false;
+          for (const quoted of draft.replaces) {
+            const target = approvedByCanonical.get(canonicalRuleText(quoted));
+            if (!target) {
+              unmatched = true;
+              break;
+            }
+            if (matchedIds.has(target.id)) continue;
+            matchedIds.add(target.id);
+            matched.push({ candidateId: target.id, rule: target.rule });
+          }
+          if (unmatched || matched.length === 0) {
+            droppedUnmatched += 1;
+            continue;
+          }
+          if (draft.action === "merge") {
+            const probe = curatedProposalToTasteCandidate({
+              id: "probe",
+              action: "merge",
+              rule: draft.rule,
+              replaces: matched,
+              reason: draft.reason,
+            });
+            if (!probe || seenKeys.has(probe.id)) continue;
+            const existing = existingById.get(probe.id);
+            // A previously rejected (or already approved) merge text must not
+            // resurface; a still-pending duplicate re-enters review without a
+            // second fact-table append.
+            if (existing && existing.status !== "pending") continue;
+            if (!existing) {
+              await dependencies.appendCurationProposal({
+                action: "merge",
+                rule: draft.rule,
+                replaces: matched,
+                reason: draft.reason,
+                createdAt: dependencies.now(),
+              });
+            }
+            seenKeys.add(probe.id);
+            items.push({
+              key: probe.id,
+              action: "merge",
+              candidateId: probe.id,
+              rule: draft.rule ?? "",
+              replaces: matched,
+              reason: draft.reason,
+            });
+          } else {
+            const target = matched[0];
+            const key = `retire-${target.candidateId}`;
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            await dependencies.appendCurationProposal({
+              action: "retire",
+              rule: null,
+              replaces: [target],
+              reason: draft.reason,
+              createdAt: dependencies.now(),
+            });
+            items.push({
+              key,
+              action: "retire",
+              candidateId: target.candidateId,
+              rule: target.rule,
+              replaces: [],
+              reason: draft.reason,
+            });
+          }
+        }
+        if (items.length === 0) {
+          store.getState().pushToast(
+            droppedUnmatched > 0
+              ? "AI 的整理提案引用的规则与现有规则对不上,已全部忽略"
+              : "AI 的整理提案都已处理过,没有需要审阅的内容",
+            "warn",
+            6000,
+          );
+          return;
+        }
+        await store.getState().refreshTasteProfile();
+        if (droppedUnmatched > 0) {
+          store.getState().pushToast(`有 ${droppedUnmatched} 条提案引用的规则对不上,已忽略`, "warn", 6000);
+        }
+        // Close the taste panel first so the review modal is the only thing
+        // on screen — curation decisions deserve full attention.
+        store.setState({ tastePanelOpen: false, ruleCuration: { items } });
+      } catch (error) {
+        store.getState().pushToast(
+          `整理规则库失败:${error instanceof Error ? error.message : String(error)}`,
           "error",
           6000,
         );

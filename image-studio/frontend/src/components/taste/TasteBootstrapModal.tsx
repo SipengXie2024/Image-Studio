@@ -32,6 +32,7 @@ export function TasteBootstrapModal({
     () => profile.candidates.filter((candidate) => (
       candidate.source.type === "feedback"
       || candidate.source.type === "induced"
+      || candidate.source.type === "curated"
       || candidate.source.signal === "style-tag"
       || candidate.source.signal === "negative-prompt"
     )),

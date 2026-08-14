@@ -18,6 +18,7 @@ import { PromptImportGate } from "./gates/PromptImportGate";
 import { UpstreamConfigGate } from "./gates/UpstreamConfigGate";
 import { TasteBootstrapGate } from "./gates/TasteBootstrapGate";
 import { TastePanelGate } from "./gates/TastePanelGate";
+import { RuleCurationGate } from "./gates/RuleCurationGate";
 import { PromptRetryGate } from "./gates/PromptRetryGate";
 import { useAndroidView } from "./hooks/useAndroidView";
 import { useDesktopPromptImport } from "./hooks/useDesktopPromptImport";
@@ -61,6 +62,7 @@ export default function App() {
       <HistoryTimelineModal />
       <TasteBootstrapGate />
       <TastePanelGate />
+      <RuleCurationGate />
       <PromptRetryGate />
       <ResultDetailGate />
       <SavePromptGate />

@@ -35,6 +35,16 @@ export interface InducedTasteSource {
   inference: "ai-induced";
 }
 
+// A merge proposal from AI rule curation: one combined rule that, once the
+// user approves it, supersedes the approved rules listed in `replaces`.
+export interface CuratedTasteSource {
+  type: "curated";
+  proposalId: string;
+  replaces: { candidateId: string; rule: string }[];
+  reason?: string;
+  inference: "ai-curated";
+}
+
 export interface TasteCandidate {
   schemaVersion: 1;
   id: string;
@@ -45,7 +55,7 @@ export interface TasteCandidate {
   // Set when the rule text was polished after generation; collectTasteProfile
   // preserves refined text instead of regenerating the raw template.
   refined?: "ai" | "user";
-  source: HistoryTasteSource | FeedbackTasteSource | InducedTasteSource;
+  source: HistoryTasteSource | FeedbackTasteSource | InducedTasteSource | CuratedTasteSource;
 }
 
 export interface TasteFeedbackEvent {
@@ -63,7 +73,7 @@ export interface TasteFeedbackEvent {
 export interface ApprovedCriticRule {
   candidateId: string;
   rule: string;
-  sourceType: "history" | "feedback" | "induced";
+  sourceType: "history" | "feedback" | "induced" | "curated";
 }
 
 export interface ApprovedCriticRulesSnapshot {
@@ -270,6 +280,45 @@ export function inducedProposalToTasteCandidate(proposal: {
   };
 }
 
+// Exposed so the curation flow can match AI-quoted rule texts against the
+// approved candidates with the same normalization the candidate ids use.
+export function canonicalRuleText(value: unknown): string {
+  return canonicalText(value);
+}
+
+// Only merge proposals become candidates: a merge carries a new rule awaiting
+// approval, while a retire targets an existing candidate and needs no new one.
+// Same text-hash id scheme as induced proposals, so re-proposing the same
+// merged rule maps onto the same candidate and past decisions keep applying.
+export function curatedProposalToTasteCandidate(proposal: {
+  id: string;
+  action: "merge" | "retire";
+  rule: string | null;
+  replaces: readonly { candidateId: string; rule: string }[];
+  reason?: string | null;
+}): TasteCandidate | null {
+  if (proposal.action !== "merge") return null;
+  const rule = compactText(proposal.rule);
+  if (!rule) return null;
+  const reason = compactText(proposal.reason);
+
+  return {
+    schemaVersion: 1,
+    id: stableCandidateId(["curated", canonicalText(rule)]),
+    status: "pending",
+    target: "critic",
+    kind: "feedback",
+    rule,
+    source: {
+      type: "curated",
+      proposalId: proposal.id,
+      replaces: proposal.replaces.map((entry) => ({ candidateId: entry.candidateId, rule: entry.rule })),
+      ...(reason ? { reason } : {}),
+      inference: "ai-curated",
+    },
+  };
+}
+
 export function buildApprovedCriticRulesSnapshot(
   candidates: readonly TasteCandidate[],
 ): ApprovedCriticRulesSnapshot {
@@ -300,7 +349,8 @@ export function buildCriticRulesSnapshot(
     const candidateId = compactText(input.candidateId);
     const rule = compactText(input.rule);
     if (!candidateId || !rule) throw new Error("critic rules require a candidate id and rule");
-    if (input.sourceType !== "history" && input.sourceType !== "feedback" && input.sourceType !== "induced") {
+    if (input.sourceType !== "history" && input.sourceType !== "feedback"
+      && input.sourceType !== "induced" && input.sourceType !== "curated") {
       throw new Error("critic rules require a valid source type");
     }
     rulesById.set(candidateId, { candidateId, rule, sourceType: input.sourceType });

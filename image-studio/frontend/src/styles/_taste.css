@@ -305,6 +305,21 @@ html.dark .taste-chip-danger {
   word-break: break-word;
 }
 
+.taste-budget-banner {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid rgb(217 119 6 / 0.7);
+  border-radius: 4px 12px 12px 4px;
+  background: rgb(245 158 11 / 0.12);
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgb(180 83 9);
+  word-break: break-word;
+}
+html.dark .taste-budget-banner {
+  color: rgb(252 211 77);
+}
+
 .taste-modal-actions {
   display: flex;
   flex-wrap: wrap;

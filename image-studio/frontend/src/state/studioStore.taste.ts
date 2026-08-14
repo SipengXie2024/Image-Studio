@@ -1,14 +1,17 @@
 import {
+  curatedProposalToTasteCandidate,
   extractColdStartTasteCandidates,
   feedbackEventToTasteCandidate,
   inducedProposalToTasteCandidate,
 } from "../lib/tasteLearning.ts";
+import { RULE_BUDGET } from "../lib/ruleCuration.ts";
 import {
   appendTasteDecision,
   appendTasteFeedback,
   listTasteDecisions,
   listTasteFeedback,
   listTasteInducedRuleProposals,
+  listTasteRuleCurationProposals,
   readTasteProfile,
   readTasteState,
   writeTasteProfile,
@@ -20,6 +23,7 @@ import { readRuntimePlatformState } from "../platform/index.ts";
 import { ReadImageAsBase64 } from "../platform/runtime/host.ts";
 import type {
   InducedRuleProposal,
+  RuleCurationProposal,
   TasteCandidateDecision,
   TasteFeedbackEvent,
   TasteFeedbackInput,
@@ -48,6 +52,7 @@ type TasteActionDependencies = {
   }) => Promise<TasteCandidateDecision>;
   listDecisions: (candidateId?: string) => Promise<TasteCandidateDecision[]>;
   listInducedProposals: () => Promise<InducedRuleProposal[]>;
+  listCurationProposals: () => Promise<RuleCurationProposal[]>;
   readProfile: () => Promise<TasteProfileState | null>;
   writeProfile: (profile: TasteProfileState) => Promise<void>;
   readBootstrapState: () => Promise<TasteBootstrapState | null>;
@@ -65,6 +70,7 @@ const defaultDependencies: TasteActionDependencies = {
   appendDecision: appendTasteDecision,
   listDecisions: listTasteDecisions,
   listInducedProposals: listTasteInducedRuleProposals,
+  listCurationProposals: listTasteRuleCurationProposals,
   readProfile: () => readTasteProfile<TasteProfileState>(),
   writeProfile: writeTasteProfile,
   readBootstrapState: () => readTasteState<TasteBootstrapState>(),
@@ -103,11 +109,12 @@ function latestDecisionByCandidate(
 }
 
 async function collectTasteProfile(dependencies: TasteActionDependencies): Promise<TasteProfileState> {
-  const [history, feedback, decisions, inducedProposals, savedProfile] = await Promise.all([
+  const [history, feedback, decisions, inducedProposals, curationProposals, savedProfile] = await Promise.all([
     dependencies.loadHistory(),
     dependencies.listFeedback(),
     dependencies.listDecisions(),
     dependencies.listInducedProposals(),
+    dependencies.listCurationProposals(),
     dependencies.readProfile(),
   ]);
   const byId = new Map(extractColdStartTasteCandidates(history).map((candidate) => [candidate.id, candidate]));
@@ -119,6 +126,12 @@ async function collectTasteProfile(dependencies: TasteActionDependencies): Promi
   // candidates survive this rebuild until the user decides on them.
   for (const proposal of inducedProposals) {
     const candidate = inducedProposalToTasteCandidate(proposal);
+    if (candidate) byId.set(candidate.id, candidate);
+  }
+  // Curation merge proposals work the same way; retire proposals target an
+  // existing candidate and never produce a new one.
+  for (const proposal of curationProposals) {
+    const candidate = curatedProposalToTasteCandidate(proposal);
     if (candidate) byId.set(candidate.id, candidate);
   }
   const latest = latestDecisionByCandidate(decisions);
@@ -302,14 +315,41 @@ export function createTasteActions(
     },
 
     async decideTasteCandidate(candidateId: string, decision: "approve" | "reject") {
-      const existing = await dependencies.listDecisions(candidateId);
-      const latestCreatedAt = existing.reduce((latest, entry) => Math.max(latest, entry.createdAt), -1);
-      await dependencies.appendDecision({
-        candidateId,
-        decision,
-        createdAt: Math.max(dependencies.now(), latestCreatedAt + 1),
-      });
-      await refresh();
+      const before = store.getState().tasteProfile;
+      const candidate = before.candidates.find((entry) => entry.id === candidateId);
+      const appendLatest = async (targetId: string, targetDecision: "approve" | "reject") => {
+        const existing = await dependencies.listDecisions(targetId);
+        const latestCreatedAt = existing.reduce((latest, entry) => Math.max(latest, entry.createdAt), -1);
+        await dependencies.appendDecision({
+          candidateId: targetId,
+          decision: targetDecision,
+          createdAt: Math.max(dependencies.now(), latestCreatedAt + 1),
+        });
+      };
+      await appendLatest(candidateId, decision);
+      // Approving a curated merge supersedes the rules it replaces: append a
+      // reject decision for each one that is still approved. The merge is
+      // approved first so a failure mid-way leaves overlap (harmless), never
+      // a gap (harmful). Everything stays append-only and reversible.
+      if (decision === "approve" && candidate?.source.type === "curated") {
+        for (const replaced of candidate.source.replaces) {
+          const target = before.candidates.find((entry) => entry.id === replaced.candidateId);
+          if (target?.status === "approved") {
+            await appendLatest(replaced.candidateId, "reject");
+          }
+        }
+      }
+      const profile = await refresh();
+      if (decision === "approve") {
+        const approvedCount = profile.candidates.filter((entry) => entry.status === "approved").length;
+        if (approvedCount > RULE_BUDGET) {
+          store.getState().pushToast(
+            `生效规则已达 ${approvedCount} 条,超过 ${RULE_BUDGET} 条预算;规则越多单条权重越被稀释,建议在「生效规则」页整理规则库`,
+            "warn",
+            8000,
+          );
+        }
+      }
     },
 
     async acknowledgeTasteBootstrap() {

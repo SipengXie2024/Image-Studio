@@ -14,7 +14,7 @@ const goSource = readFileSync(
   "utf8",
 );
 
-const TEXT_MODES = ["suggest", "distill-rule", "revise-rule", "refine-note", "induce-rules"];
+const TEXT_MODES = ["suggest", "distill-rule", "revise-rule", "refine-note", "induce-rules", "curate-rules"];
 
 function goInstructionFor(mode) {
   const pattern = new RegExp(

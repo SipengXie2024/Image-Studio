@@ -32,10 +32,12 @@ export function TasteRuleCard({
   const source = candidate.source;
   const sourceLabel = source.type === "history"
     ? source.signal === "style-tag" ? "历史 · 风格标签" : "历史 · 明确排除项"
-    : source.type === "induced" ? "AI 从历史归纳" : "明确反馈";
+    : source.type === "induced" ? "AI 从历史归纳"
+      : source.type === "curated" ? "AI 整理归并" : "明确反馈";
   const evidenceLabel = source.type === "history"
     ? `${source.itemIds.length} 条历史证据 · 曾请求≠喜欢`
-    : source.type === "induced" ? "AI 推理 · 采纳前请核对" : "来自你主动提交的反馈";
+    : source.type === "induced" || source.type === "curated"
+      ? "AI 推理 · 采纳前请核对" : "来自你主动提交的反馈";
   const anyBusy = disabled || ruleBusy;
 
   async function submitEditor() {
@@ -83,6 +85,20 @@ export function TasteRuleCard({
 
       {source.type === "induced" && source.evidence ? (
         <p className="taste-quote-block mt-2">归纳依据:{source.evidence}</p>
+      ) : null}
+
+      {source.type === "curated" ? (
+        <div className="mt-2 space-y-1.5">
+          <p className="taste-list-item-meta">
+            {candidate.status === "approved" ? "已替代" : "采纳后将替代"}以下 {source.replaces.length} 条规则:
+          </p>
+          {source.replaces.map((replaced) => (
+            <p key={replaced.candidateId} className="taste-quote-block">{replaced.rule}</p>
+          ))}
+          {source.reason ? (
+            <p className="taste-list-item-meta">整理依据:{source.reason}</p>
+          ) : null}
+        </div>
       ) : null}
 
       {editor?.mode === "revise" ? (
