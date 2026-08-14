@@ -43,16 +43,17 @@
 
 旧版历史没有可靠的 pick/reject 语义。启动层只从历史里的显式 `styleTag` 和 `negativePrompt` 提取“曾请求过”的候选；候选默认 `pending`，必须由用户逐条 approve/reject。不要从 prompt、`revisedPrompt`、保存、删除或浏览次数推断品味。
 
-### 2.4 长期规则默认只作用于 critic
+### 2.4 长期规则只作用于 critic 与需确认的参谋草稿
 
 - `TasteCandidate.target` 必须是 `critic`。
-- 只有用户批准的候选进入 `ApprovedCriticRulesSnapshot`。
-- 规则用于评分、排序、DQ 和补抽，不用于改写生成 prompt。
-- `buildApprovedCriticRulesSnapshot()` 对非 critic target 的拒绝是产品安全边界，不要移除。
+- 只有用户批准的候选进入 `ApprovedCriticRulesSnapshot`，用于评分、排序、DQ 和补抽。
+- 已批准规则还会作为上下文进入两条参谋通道：suggest（reject 后的辅助重试草稿，走请求 JSON 的 `approvedRules` 字段）与主「AI 优化提示词」（`withApprovedTastePreferences` 在 prompt 尾部拼 marked guidance section）。两条通道的产出都必须是用户可见、可编辑、经确认才提交的草稿，且 UI 要标明结合了几条规则。
+- refine-note（编辑建议转写）刻意不注入规则：它的契约是忠实转写用户原意，不得夹带未请求的方向。
+- 规则永远不直接拼进提交给生图模型的 prompt。`buildApprovedCriticRulesSnapshot()` 对非 critic target 的拒绝是产品安全边界，不要移除。
 
 ### 2.5 feedback 与 decision 是 append-only
 
-- `feedbackEvents` 和 `candidateDecisions` 使用新增记录表达事实与后续决定，不覆盖旧事件。
+- `feedbackEvents`、`candidateDecisions`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals` 使用新增记录表达事实与后续决定，不覆盖旧事件。
 - 更改决定时追加新的 decision，以最新一条作为当前状态；不要原地修改或删除旧决定。
 - 写 feedback 时同时保存可用的视觉判例资源，避免只剩容易失效的 history 引用。
 - 测试不能污染真实用户数据；不要为了修测试清空 IndexedDB。
@@ -84,6 +85,16 @@ edit 轮默认继承源图的 hard gate；只有编辑建议明确要求新增�
 - `c170f69`：隔离批次预览 fixture，避免开发预览写入真实品味反馈。
 - `442fc86`：“选定并提出建议”保存一次 edit feedback 和视觉判例后，以选中图为唯一 edit source、以用户建议原文为 prompt 自动续跑；edit 批次进入 critic/DQ/一次补抽循环，并继承或按显式多人/多视图要求解除 hard gate。
 - `78ed2d7`：Images API 流式响应没有最终图片时，自动改用非流式 `b64_json` 兼容模式重试一次；显式 error/failed 事件保留真实原因。frontend remote kernel 与 Go client 行为一致。
+- `1327e34`：品味闭环开发交接文档。
+
+**工作区另有大量未提交改动（2026-08-14 迭代，均已通过全量验证与 EXE 冒烟）**，主要包括：
+
+- reject → harness 辅助重试闭环：suggest mode 起草改进 prompt → 对照弹窗确认/编辑/拒绝 → 采纳续跑；决定入 `promptSuggestionDecisions` 表；`submit()` 支持 `{promptProvenance, disableLoop}` options。
+- 规则蒸馏三通道（distill-rule / 手动编辑 / revise-rule）、edit 弹窗「让 harness 优化」（refine-note）、删除预设风格 chips。
+- 品味面板 TastePanel（候选记录/生效规则/反馈判例/建议采纳史 四 tab；FooterBar「学习经验」常驻入口）与建议效果统计（`suggestionOutcomes` 表）。
+- 「从历史学习」：induce-rules mode 让 AI 从判例与建议史归纳规则候选，落 append-only `inducedRuleProposals` 表（IndexedDB v5），候选 id 按规则文本 hash 去重。
+- 已批准规则注入 suggest 与主「AI 优化提示词」两条参谋通道（见契约 2.4）；default/edit/suggest 及全部文本 mode 的 instruction 有双端字节一致守卫（`test/promptModeParity.test.mjs`；**新增 instruction 不得含双引号**，否则 Go 侧正则提取会截断）。
+- 历史右键「重新进入批次评审」；`HistoryItem.sourcePaths` 写入修复（此前只读不写）；批次评审按钮实体化；品味 UI 一律用 unlayered 手写类（`styles/_taste.css`，Windows WebView 下部分 tailwind layered utilities 不渲染）。
 
 接手时先运行 `git status --short --branch` 和 `git log -7 --oneline`，以仓库实际状态为准。
 
@@ -94,7 +105,7 @@ edit 轮默认继承源图的 hard gate；只有编辑建议明确要求新增�
 ### 品味闭环
 
 - `image-studio/frontend/src/lib/tasteStorage.ts`
-  - `image-studio-taste` IndexedDB；`feedbackEvents`、`candidateDecisions`、`visualExemplars`、`documents`。
+  - `image-studio-taste` IndexedDB（v5）；`feedbackEvents`、`candidateDecisions`、`documents`、`visualExemplars`、`promptSuggestionDecisions`、`suggestionOutcomes`、`inducedRuleProposals`。
 - `image-studio/frontend/src/lib/tasteLearning.ts`
   - prompt 字节一致性、旧历史弱候选、显式反馈候选、批准后的 critic rules snapshot。
 - `image-studio/frontend/src/lib/tasteCritic.ts`
@@ -104,9 +115,23 @@ edit 轮默认继承源图的 hard gate；只有编辑建议明确要求新增�
 - `image-studio/frontend/src/state/studioStore.critic.ts`
   - 准备当前图与历史视觉判例、调用视觉模型、持久化 `TasteReview`。
 - `image-studio/frontend/src/state/studioStore.ts`
-  - submit/job/batch 主编排、`originalPrompt`/`submittedPrompt`、critic/DQ/补抽触发与 workspace 状态。
+  - submit/job/batch 主编排、`originalPrompt`/`submittedPrompt`、critic/DQ/补抽触发与 workspace 状态；「AI 优化提示词」的规则注入点。
+- `image-studio/frontend/src/lib/promptSuggestion.ts`
+  - suggest 请求构建/解析、`prepareApprovedRulesForContext`、`withApprovedTastePreferences`（优化通道的规则注入）。
+- `image-studio/frontend/src/lib/ruleInduction.ts`
+  - induce-rules 请求构建与 strict JSON 响应解析（≤5 条）。
+- `image-studio/frontend/src/state/studioStore.suggestion.ts`
+  - 辅助重试的起草/决定/refine-note actions（依赖注入，node 可裸测）。
+- `image-studio/frontend/src/state/studioStore.tasteRules.ts`
+  - 规则蒸馏/改写/从历史归纳 actions（哨兵 busyId 全面板互斥）。
+- `image-studio/frontend/src/app/gates/PromptRetryGate.tsx` + `components/taste/PromptSuggestionModal.tsx`
+  - reject 后的辅助重试卡片与草稿对照弹窗。
+- `image-studio/frontend/src/components/taste/TastePanel.tsx` + `TasteRuleCard.tsx`
+  - 学习透明面板与规则卡（打磨三通道、归纳依据展示）。
+- `image-studio/frontend/src/styles/_taste.css`
+  - 品味 UI 的 unlayered 手写类；关键控件样式不要依赖 tailwind layered utilities。
 - `image-studio/frontend/src/types/domain.ts`
-  - `HistoryItem`、`TasteReview`、DQ 字段。
+  - `HistoryItem`（含 `sourcePaths`）、`TasteReview`、DQ 字段。
 
 ### 评审 UX
 
@@ -204,9 +229,16 @@ node --test `
   test/batchCompareView.test.mjs `
   test/studioStoreTaste.test.mjs `
   test/studioStoreCritic.test.mjs `
+  test/studioStorePromptSuggestion.test.mjs `
+  test/studioStoreTasteRules.test.mjs `
   test/tasteCritic.test.mjs `
   test/tasteLearning.test.mjs `
   test/tasteStorage.test.mjs `
+  test/tasteInsights.test.mjs `
+  test/promptSuggestion.test.mjs `
+  test/ruleInduction.test.mjs `
+  test/promptModeParity.test.mjs `
+  test/requestModel.test.mjs `
   test/remoteKernel.test.mjs
 ```
 
@@ -220,7 +252,9 @@ cd ../image-studio
 go test ./...
 ```
 
-2026-08-14 本轮验证结果：frontend 全量测试为 247 项中 243 通过、4 项失败；4 项均来自 `image-studio/frontend/test/runtimeHost.test.mjs`，已在干净上游提交复现，并非本分支改动引入。`go-cli` 全量测试通过。Wails/backend 全量测试仍有 1 个既有失败：`TestManagedRuntimeCleanupDirsPreservePrimaryImageData` 期望 10 个 cleanup dirs、实际 13 个。Windows 与 Android frontend build 均通过。不要删除、skip 或弱化测试来制造全绿；若失败数或失败文件变化，必须重新定位并如实报告。
+2026-08-14 最新一轮验证结果：frontend 全量测试为 319 项中 315 通过、4 项失败；4 项均来自 `image-studio/frontend/test/runtimeHost.test.mjs`，已在干净上游提交复现，并非本分支改动引入。`go-cli` 全量测试通过。Wails/backend 全量测试仍有 1 个既有失败：`TestManagedRuntimeCleanupDirsPreservePrimaryImageData` 期望 10 个 cleanup dirs、实际 13 个。Windows frontend build 通过。不要删除、skip 或弱化测试来制造全绿；若失败数或失败文件变化，必须重新定位并如实报告。
+
+`test/promptModeParity.test.mjs` 守卫 `shared/kernel/requestModel.js` 与 `backend/prompt_optimize.go` 的 instruction 字节一致（文本 mode 分支 + default 种子 + edit 后缀）。它用 Go 正则 `"([^"]*)"` 提取字符串，因此**任何 instruction 文本不得包含双引号**；JSON 输出格式只能用文字描述。改任一侧 instruction 必须同步另一侧。
 
 每次交付还要做一次真实 UI/上游验证：
 
@@ -243,7 +277,7 @@ go test ./...
 
 ## 9. 下一步优先级
 
-1. 用本轮重建的 EXE 做真实上游 smoke：确认 edit 自动续跑、流式无图时兼容重试一次、编辑批次仍执行 DQ/补抽；记录结果但不要提交用户图片或 raw response。
+1. 用最新 EXE 做真实上游 smoke：辅助重试草稿弹窗的规则计数小字、主「AI 优化提示词」的规则注入与 toast 计数、「从历史学习」的归纳质量、edit 自动续跑与编辑批次的 DQ/补抽；记录结果但不要提交用户图片或 raw response。
 2. 验证失败事务：source 准备失败不写 feedback；feedback 已写但 submit 失败时不重复记录；多次点击确认不能产生重复事件或重复 job。
 3. 用真实最近一批数据检查“视觉判例确实作为图片附件进入 critic”，而不是只保存了 metadata；补充可观察的诊断信息但不要泄露图片或 key。
 4. 校准 DQ 假阳性/假阴性，特别是“增加对手/另一个视图”的中英文表达；坚持“模型报告事实，客户端决定 DQ”。
