@@ -10,6 +10,7 @@ import {
   normalizeAutoRetryCount,
   normalizeBaseURL,
   repairSizeForOpenAI,
+  shouldUseImagesNewAPICompat,
 } from "../../../../../../shared/kernel/requestModel.js";
 import {
   extractResponseErrorMessage,
@@ -27,6 +28,7 @@ import { requestResponsesOnce } from "./responses.ts";
 import {
   RETRY_BACKOFF_MS,
   RemoteKernelError,
+  RemoteNoImageInResponseError,
   type RemotePromptOptimizeInput,
   type RemoteJobCallbacks,
   type RemoteJobRequest,
@@ -64,7 +66,8 @@ export async function runRemoteImageJob(
     });
   }
   for (let variantIndex = 0; variantIndex < requestVariants.length; variantIndex++) {
-    const activeRequest = requestVariants[variantIndex];
+    let activeRequest = requestVariants[variantIndex];
+    let compatRetryTried = false;
     if (variantIndex > 0) {
       callbacks.onLog?.("主上游自动重试失败，切换到备用上游再试一次...");
     }
@@ -120,6 +123,22 @@ export async function runRemoteImageJob(
             attempt -= 1;
             continue;
           }
+        }
+        if (
+          normalizeAPIMode(activeRequest.payload.apiMode) === "images"
+          && typed instanceof RemoteNoImageInResponseError
+          && !compatRetryTried
+          && !shouldUseImagesNewAPICompat(activeRequest.payload)
+        ) {
+          compatRetryTried = true;
+          callbacks.onLog?.("Images API 流式响应没有返回最终图片，自动切换为非流式 b64_json 兼容模式重试一次...");
+          activeRequest = {
+            ...activeRequest,
+            payload: { ...activeRequest.payload, imagesNewAPICompat: true },
+          };
+          requestVariants[variantIndex] = activeRequest;
+          attempt -= 1;
+          continue;
         }
         const retryable = retryableRaw || isTransportishError(typed);
         if (autoRetryEnabled && !workerAlreadyRetried && attempt < maxAttempts && retryable) {

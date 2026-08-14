@@ -9,6 +9,7 @@ import {
 import { nativeHttpRequestText } from "./nativeHttp.ts";
 import {
   RemoteKernelError,
+  RemoteNoImageInResponseError,
   STATUS_INTERVAL_MS,
   type ExtractedImageResult,
   type RemoteJobCallbacks,
@@ -17,6 +18,34 @@ import {
 } from "./types.ts";
 
 const MAX_IMAGE_URL_BYTES = 50 * 1024 * 1024;
+
+function explicitImagesErrorMessage(event: any): string | null {
+  const error = event?.error ?? event?.response?.error;
+  if (error && typeof error === "object") {
+    const message = String(error.message || "Images API 返回失败事件").trim();
+    const code = String(error.code || "").trim();
+    return `上游返回错误:${message}${code ? ` (code: ${code})` : ""}`;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return `上游返回错误:${error.trim()}`;
+  }
+  const type = String(event?.type || "");
+  if (type !== "error" && !type.endsWith(".failed")) return null;
+  return `上游返回错误:${String(event?.message || "Images API 返回失败事件").trim()}`;
+}
+
+function explicitImagesStreamError(raw: string, allowRawJSON: boolean): string | null {
+  try {
+    const direct = explicitImagesErrorMessage(JSON.parse(raw));
+    if (direct) return direct;
+  } catch {}
+  for (const line of raw.split(/\r?\n/)) {
+    const event = parseStreamEvent(line, allowRawJSON);
+    const message = event ? explicitImagesErrorMessage(event) : null;
+    if (message) return message;
+  }
+  return null;
+}
 
 function parseStreamEvent(line: string, allowRawJSON = false): any | null {
   const stripped = line.trim();
@@ -110,7 +139,7 @@ function parseImagesResponseSync(raw: string, status: number): ExtractedImageRes
     if (first?.url) {
       throw new RemoteKernelError("上游返回 URL 而非 b64_json，当前路径需要下载 URL 图片");
     }
-    throw new RemoteKernelError("上游没有返回可用图片");
+    throw new RemoteNoImageInResponseError();
   }
   return {
     imageB64: first.b64_json,
@@ -296,7 +325,7 @@ async function parseImagesResponse(
     }
   }
   if (status >= 400) throw new RemoteKernelError(`上游返回 HTTP ${status}`);
-  throw new RemoteKernelError("上游没有返回可用图片");
+  throw new RemoteNoImageInResponseError();
 }
 
 function parseImagesStreamRaw(
@@ -390,6 +419,10 @@ export async function requestImagesOnce(
             request.payload.allowInsecureConnection === true,
             allowEmptyKeepAlive,
           );
+      if (isStream) {
+        const explicitError = explicitImagesStreamError(rawBody, allowEmptyKeepAlive);
+        if (explicitError) throw new RemoteKernelError(explicitError, rawPath);
+      }
       if (!result && isStream && allowEmptyKeepAlive) {
         result = await parseImagesResponse(
           rawBody,
@@ -402,7 +435,7 @@ export async function requestImagesOnce(
           true,
         );
       }
-      if (!result) throw new RemoteKernelError("上游没有返回可用图片", rawPath);
+      if (!result) throw new RemoteNoImageInResponseError(rawPath);
       return { ...result, rawPath, prompt: request.payload.prompt, mode: request.payload.mode };
     }
     if (proxyMode !== "system") {
@@ -463,6 +496,8 @@ export async function requestImagesOnce(
       if (!response.ok) {
         throw new RemoteKernelError(`上游返回 HTTP ${response.status}`, rawPath);
       }
+      const explicitError = explicitImagesStreamError(raw, allowEmptyKeepAlive);
+      if (explicitError) throw new RemoteKernelError(explicitError, rawPath);
       result ??= parseImagesStreamRaw(raw, callbacks, false, allowEmptyKeepAlive);
       if (!result && allowEmptyKeepAlive) {
         result = await parseImagesResponse(
@@ -476,7 +511,7 @@ export async function requestImagesOnce(
           true,
         );
       }
-      if (!result) throw new RemoteKernelError("上游没有返回可用图片", rawPath);
+      if (!result) throw new RemoteNoImageInResponseError(rawPath);
       return { ...result, rawPath, prompt: request.payload.prompt, mode: request.payload.mode };
     }
     const raw = await response.text();

@@ -129,7 +129,31 @@ type imageStreamExtractor struct {
 	partialB64 string
 	final      ImageResult
 	hasFinal   bool
+	err        error
 	onPartial  func(PartialImage)
+}
+
+func explicitImagesAPIEventError(ev Event) error {
+	if errObj, ok := ev["error"].(map[string]any); ok {
+		return errors.New(describeAPIError(errObj))
+	}
+	if errText, ok := ev["error"].(string); ok && strings.TrimSpace(errText) != "" {
+		return fmt.Errorf("上游返回错误:%s", strings.TrimSpace(errText))
+	}
+	if response, ok := ev["response"].(map[string]any); ok {
+		if errObj, ok := response["error"].(map[string]any); ok {
+			return errors.New(describeAPIError(errObj))
+		}
+	}
+	typeName, _ := ev["type"].(string)
+	if typeName != "error" && !strings.HasSuffix(typeName, ".failed") {
+		return nil
+	}
+	message, _ := ev["message"].(string)
+	if strings.TrimSpace(message) == "" {
+		message = "Images API 返回失败事件"
+	}
+	return fmt.Errorf("上游返回错误:%s", strings.TrimSpace(message))
 }
 
 func (e *imageStreamExtractor) consume(line string) bool {
@@ -147,6 +171,10 @@ func (e *imageStreamExtractor) consume(line string) bool {
 	var ev Event
 	if err := decodeEvent(payload, &ev); err != nil {
 		return false
+	}
+	if err := explicitImagesAPIEventError(ev); err != nil {
+		e.err = err
+		return true
 	}
 	evType, _ := ev["type"].(string)
 	switch evType {
@@ -168,8 +196,6 @@ func (e *imageStreamExtractor) consume(line string) bool {
 			e.hasFinal = true
 			return true
 		}
-	case "error":
-		return true
 	}
 	if ev["object"] == "image.generation.result" || ev["object"] == "image.edit.result" {
 		b, err := json.Marshal(ev)
@@ -426,6 +452,9 @@ func RequestImagesAPIWithPartial(
 		}
 		if resp.StatusCode/100 != 2 {
 			return ImageResult{}, fmt.Errorf("上游返回 HTTP %d", resp.StatusCode)
+		}
+		if extractor.err != nil {
+			return ImageResult{}, extractor.err
 		}
 		if result, ok := extractor.result(); ok {
 			return result, nil

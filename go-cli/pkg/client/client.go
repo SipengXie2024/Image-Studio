@@ -402,9 +402,12 @@ func imagesAPIWithRetries(
 	}
 	maxAttempts := effectiveMaxAttempts(opts)
 	sizeRepairTried := false
+	compatRetryTried := false
+	requestNumber := 0
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		rawPath := filepath.Join(outputDir, fmt.Sprintf("images-response-%s-attempt%d.json", timestamp, attempt))
+		requestNumber++
+		rawPath := filepath.Join(outputDir, fmt.Sprintf("images-response-%s-attempt%d.json", timestamp, requestNumber))
 		lastPath = rawPath
 		onLog(fmt.Sprintf("[Images API] 第 %d/%d 次请求...", attempt, maxAttempts))
 
@@ -431,6 +434,16 @@ func imagesAPIWithRetries(
 			}
 		}
 
+		if errors.Is(reqErr, ErrNoImageInResponse) &&
+			!compatRetryTried &&
+			!shouldUseImagesNonStreamingCompat(opts.ImageModelID, opts.ImagesNewAPICompat) {
+			compatRetryTried = true
+			opts.ImagesNewAPICompat = true
+			onLog("Images API 流式响应没有返回最终图片，自动切换为非流式 b64_json 兼容模式重试一次...")
+			attempt--
+			continue
+		}
+
 		lastErr = reqErr
 		// Images API has no SSE / no partial — only retry on transport-level
 		// errors and Cloudflare 5xx HTML pages.
@@ -441,6 +454,9 @@ func imagesAPIWithRetries(
 				return ImageResult{}, lastPath, ctx.Err()
 			}
 			continue
+		}
+		if errors.Is(reqErr, ErrNoImageInResponse) {
+			return ImageResult{}, lastPath, fmt.Errorf("%s", DescribeProblem(raw))
 		}
 		// 同上,raw 路径靠返回值带,不再嵌进 error message。
 		return ImageResult{}, lastPath, reqErr
@@ -468,6 +484,7 @@ func imagesAPIWithRetriesInMemory(
 	}
 	maxAttempts := effectiveMaxAttempts(opts)
 	sizeRepairTried := false
+	compatRetryTried := false
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		onLog(fmt.Sprintf("[Images API] 第 %d/%d 次请求...", attempt, maxAttempts))
@@ -490,6 +507,16 @@ func imagesAPIWithRetriesInMemory(
 			}
 		}
 
+		if errors.Is(reqErr, ErrNoImageInResponse) &&
+			!compatRetryTried &&
+			!shouldUseImagesNonStreamingCompat(opts.ImageModelID, opts.ImagesNewAPICompat) {
+			compatRetryTried = true
+			opts.ImagesNewAPICompat = true
+			onLog("Images API 流式响应没有返回最终图片，自动切换为非流式 b64_json 兼容模式重试一次...")
+			attempt--
+			continue
+		}
+
 		lastErr = reqErr
 		if autoRetryEnabled && !workerAlreadyRetried(raw) && attempt < maxAttempts && (IsRetryable(raw) || isTransportishError(reqErr)) {
 			onLog(fmt.Sprintf("%v", reqErr))
@@ -498,6 +525,9 @@ func imagesAPIWithRetriesInMemory(
 				return ImageResult{}, lastRaw, ctx.Err()
 			}
 			continue
+		}
+		if errors.Is(reqErr, ErrNoImageInResponse) {
+			return ImageResult{}, raw, fmt.Errorf("%s", DescribeProblem(raw))
 		}
 		return ImageResult{}, raw, reqErr
 	}
