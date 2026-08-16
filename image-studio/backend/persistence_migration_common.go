@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,9 @@ func webviewMigrationCandidates(dstAbs string, legacyPaths []string) []webviewMi
 		}
 		candidates = append(candidates, webviewMigrationCandidate{path: legacyAbs, score: score})
 	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
 	return candidates
 }
 
@@ -64,7 +68,13 @@ func dirExists(path string) bool {
 func imageStudioWebviewProfileScore(path string) int64 {
 	var total int64
 	var matched int64
-	for _, rel := range []string{"IndexedDB", "Local Storage", filepath.Join("WebsiteData", "Default")} {
+	for _, rel := range []string{
+		"IndexedDB",
+		"Local Storage",
+		filepath.Join("WebsiteData", "Default"),
+		filepath.Join("EBWebView", "Default", "IndexedDB"),
+		filepath.Join("EBWebView", "Default", "Local Storage"),
+	} {
 		scanned, hit := storageDirScore(filepath.Join(path, rel))
 		total += scanned
 		matched += hit
@@ -100,7 +110,7 @@ func isEmptyOrDisposableWebviewProfile(path string) bool {
 		if name == "Crashpad" || name == "BrowserMetrics" || name == "DevToolsActivePort" {
 			continue
 		}
-		if name == "Network" || name == "Default" || name == "ShaderCache" || name == "GrShaderCache" || name == "WebsiteData" {
+		if name == "Network" || name == "Default" || name == "EBWebView" || name == "ShaderCache" || name == "GrShaderCache" || name == "WebsiteData" {
 			if dirSize(full) == 0 {
 				continue
 			}
@@ -181,6 +191,27 @@ func copyDir(src, dst string) error {
 		}
 		return copyFile(src, dst, rel, info)
 	})
+}
+
+func copyDirToNewDestination(src, dst string) error {
+	tmp, err := os.MkdirTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".migrating-*")
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
+	if err := copyDir(src, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func copyFile(srcRoot, dstRoot, rel string, info fs.FileInfo) error {

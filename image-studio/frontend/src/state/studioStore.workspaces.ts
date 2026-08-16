@@ -163,6 +163,12 @@ export function createWorkspaceActions(store: StateAdapter) {
         errorRawPath: target.errorRawPath ?? null,
         isRunning: runningJobs.length > 0,
         lastPayload: target.lastPayload ?? null,
+        // The prompt-retry offer belongs to the workspace it was rejected in;
+        // adopting it after a switch would generate into the wrong workspace.
+        promptRetryOffer: null,
+        promptSuggestion: null,
+        promptSuggestionDrafting: false,
+        promptSuggestionSubmitting: false,
       });
     },
 
@@ -231,6 +237,10 @@ export function createWorkspaceActions(store: StateAdapter) {
           errorRawPath: next.errorRawPath ?? null,
           isRunning: runningJobs.length > 0,
           lastPayload: next.lastPayload ?? null,
+          promptRetryOffer: null,
+          promptSuggestion: null,
+          promptSuggestionDrafting: false,
+          promptSuggestionSubmitting: false,
         });
       } else {
         store.setState({ workspaces: remaining, runningJobMeta: nextMeta });

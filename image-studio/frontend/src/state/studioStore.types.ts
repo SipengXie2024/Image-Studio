@@ -37,6 +37,15 @@ import type {
   Workspace,
 } from "../types/domain";
 import type { RunningJobMeta } from "./workspaceRuntime";
+import type { TasteCandidate } from "../lib/tasteLearning";
+
+export interface TasteProfileState {
+  schemaVersion: 1;
+  candidates: TasteCandidate[];
+  approvedCandidateIds: string[];
+  updatedAt: number;
+  bootstrapAcknowledged: boolean;
+}
 
 export interface ModeConfig {
   baseURL: string;
@@ -49,7 +58,7 @@ export interface ModeConfig {
 export interface PromptOptimizeRequest {
   apiKey: string;
   prompt: string;
-  mode: Mode | "describe";
+  mode: Mode | "describe" | "critic" | "suggest" | "distill-rule" | "revise-rule" | "refine-note" | "induce-rules" | "curate-rules";
   baseURL: string;
   textModelID: string;
   proxyMode: ProxyMode;
@@ -138,6 +147,28 @@ export interface StudioState {
   resultGridOpen: boolean;
   historyRailCollapsed: boolean;
   historyTimelineOpen: boolean;
+  tasteProfile: TasteProfileState;
+  tasteBootstrapOpen: boolean;
+  tasteLoading: boolean;
+  tasteCriticRunning: boolean;
+  tasteCriticError: string | null;
+  tasteCriticBatchId: string | null;
+  promptRetryOffer: import("../lib/promptSuggestion").PromptRetryOffer | null;
+  promptSuggestion: {
+    offer: import("../lib/promptSuggestion").PromptRetryOffer;
+    draftPrompt: string;
+    // How many approved taste rules rode along in the draft request; shown in
+    // the review modal so the user knows what shaped the draft.
+    appliedRuleCount: number;
+  } | null;
+  promptSuggestionDrafting: boolean;
+  promptSuggestionSubmitting: boolean;
+  tasteRuleBusyId: string | null;
+  editNoteRefining: boolean;
+  tastePanelOpen: boolean;
+  // Pending AI curation proposals awaiting the user's explicit per-item
+  // decisions in the review modal; null when no review is open.
+  ruleCuration: import("../lib/ruleCuration").RuleCurationReview | null;
   tool: "pan" | "mask" | "annotate";
   brushSize: number;
   brushMode: "paint" | "erase";
@@ -202,7 +233,7 @@ export interface StudioState {
   removeSource: (index: number) => void;
   clearSources: () => void;
   reorderSources: (from: number, to: number) => void;
-  submit: () => Promise<void>;
+  submit: (options?: { promptProvenance?: "user-controls"; disableLoop?: boolean }) => Promise<{ batchId: string } | void>;
   cancel: () => Promise<void>;
   reuseAsSource: (item: HistoryItem) => Promise<void>;
   applyHistoryParams: (item: HistoryItem) => void;
@@ -225,6 +256,7 @@ export interface StudioState {
   setCompareSplit: (v: number) => void;
   openResultGrid: () => void;
   closeResultGrid: () => void;
+  reopenBatchFromHistory: (item: HistoryItem) => boolean;
   selectBatchResult: (item: HistoryItem) => Promise<void>;
   stepBatchResult: (delta: -1 | 1) => Promise<void>;
   importImageFile: (file: File) => Promise<void>;
@@ -264,6 +296,34 @@ export interface StudioState {
   loadMoreHistory: () => Promise<void>;
   openHistoryTimeline: () => void;
   closeHistoryTimeline: () => void;
+  bootstrapTaste: () => Promise<void>;
+  rescanTasteHistory: () => Promise<void>;
+  refreshTasteProfile: () => Promise<void>;
+  decideTasteCandidate: (candidateId: string, decision: "approve" | "reject") => Promise<void>;
+  acknowledgeTasteBootstrap: () => Promise<void>;
+  closeTasteBootstrap: () => void;
+  pickBatchResult: (item: HistoryItem) => Promise<void>;
+  editBatchResult: (input: { item: HistoryItem; items: HistoryItem[]; note: string; keepSourcePaths?: readonly string[] }) => Promise<void>;
+  rejectBatch: (input: { items: HistoryItem[]; note: string }) => Promise<void>;
+  draftPromptSuggestion: () => Promise<void>;
+  decidePromptSuggestion: (input: { decision: "accept" | "reject"; finalPrompt?: string }) => Promise<void>;
+  dismissPromptRetryOffer: () => void;
+  closePromptSuggestion: () => void;
+  updateCandidateRule: (candidateId: string, ruleText: string) => Promise<void>;
+  distillCandidateRule: (candidateId: string) => Promise<void>;
+  reviseCandidateRule: (candidateId: string, instruction: string) => Promise<void>;
+  induceRulesFromHistory: () => Promise<void>;
+  curateRules: () => Promise<void>;
+  settleRuleCurationItem: (key: string) => void;
+  closeRuleCuration: () => void;
+  refineEditNote: (input: { note: string; originalPrompt: string }) => Promise<string | null>;
+  openTastePanel: () => void;
+  closeTastePanel: () => void;
+  reviewBatchWithTasteCritic: (options?: {
+    items?: HistoryItem[];
+    silent?: boolean;
+    hardGateOverride?: import("../lib/tasteCritic").TasteCriticHardGate;
+  }) => Promise<boolean>;
   pruneHistoryOlderThanDays: (days: number) => Promise<number>;
   savePreset: (name: string) => string | null;
   overwritePreset: (id: string) => boolean;

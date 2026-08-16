@@ -9,7 +9,7 @@ import type {
   Workspace,
 } from "../../types/domain";
 
-export type PreviewScenario = "mac-workspace" | "windows-right-rail";
+export type PreviewScenario = "mac-workspace" | "windows-right-rail" | "batch-compare";
 
 export interface WorkspacePreviewData {
   profile: UpstreamProfile;
@@ -24,8 +24,10 @@ export interface WorkspacePreviewData {
 const PREVIEW_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAbUlEQVR4nO3PQQ3AIADAQMD2/hdwwZE8SBR0ztn3jJ9Zd7wD8E1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYE1gTWBNYF0X2AGCb5Q0aAAAAAElFTkSuQmCC";
 
-function previewImageUrl(label: string, hue: number): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="hsl(${hue} 78% 58%)"/><stop offset="55%" stop-color="hsl(${(hue + 58) % 360} 74% 44%)"/><stop offset="100%" stop-color="hsl(${(hue + 128) % 360} 72% 26%)"/></linearGradient></defs><rect width="480" height="480" fill="url(#g)"/><circle cx="360" cy="116" r="132" fill="rgba(255,255,255,.18)"/><circle cx="116" cy="348" r="154" fill="rgba(0,0,0,.2)"/><rect x="56" y="306" width="368" height="90" rx="28" fill="rgba(0,0,0,.34)"/><text x="82" y="365" font-family="Inter,Arial,sans-serif" font-size="44" font-weight="800" fill="white">${label}</text></svg>`;
+function previewImageUrl(label: string, hue: number, width = 480, height = 480): string {
+  const shortEdge = Math.min(width, height);
+  const padding = Math.round(shortEdge * 0.09);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="hsl(${hue} 78% 58%)"/><stop offset="55%" stop-color="hsl(${(hue + 58) % 360} 74% 44%)"/><stop offset="100%" stop-color="hsl(${(hue + 128) % 360} 72% 26%)"/></linearGradient></defs><rect width="${width}" height="${height}" fill="url(#g)"/><rect x="${padding}" y="${padding}" width="${width - padding * 2}" height="${height - padding * 2}" rx="24" fill="none" stroke="rgba(255,255,255,.72)" stroke-width="6"/><circle cx="${width * 0.76}" cy="${height * 0.24}" r="${shortEdge * 0.25}" fill="rgba(255,255,255,.18)"/><circle cx="${width * 0.24}" cy="${height * 0.76}" r="${shortEdge * 0.29}" fill="rgba(0,0,0,.2)"/><rect x="${padding}" y="${height - padding - shortEdge * 0.18}" width="${width - padding * 2}" height="${shortEdge * 0.18}" rx="18" fill="rgba(0,0,0,.34)"/><text x="${padding * 1.45}" y="${height - padding - shortEdge * 0.055}" font-family="Inter,Arial,sans-serif" font-size="${shortEdge * 0.095}" font-weight="800" fill="white">${label}</text></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
@@ -36,6 +38,7 @@ export function readPreviewScenario(): PreviewScenario | null {
     const preview = (params.get("preview") ?? "").trim().toLowerCase();
     if (preview === "mac-workspace") return "mac-workspace";
     if (preview === "windows-right-rail") return "windows-right-rail";
+    if (preview === "batch-compare") return "batch-compare";
     return null;
   } catch {
     return null;
@@ -255,6 +258,25 @@ export function buildMacWorkspacePreview(workspaceId: string): WorkspacePreviewD
     currentImage,
     sources,
     workspace,
+  };
+}
+
+export function buildBatchComparePreview(workspaceId: string): WorkspacePreviewData {
+  const preview = buildMacWorkspacePreview(workspaceId);
+  const batch = preview.history.slice(0, 6).map((item, index) => ({
+    ...item,
+    previewUrl: previewImageUrl(
+      `B${index + 1}`,
+      196 + index * 17,
+      index % 3 === 0 ? 640 : index % 3 === 1 ? 360 : 480,
+      index % 3 === 0 ? 360 : index % 3 === 1 ? 640 : 480,
+    ),
+  }));
+  const history = [...batch, ...preview.history.slice(6)];
+  return {
+    ...preview,
+    currentImage: history[0] ?? preview.currentImage,
+    history,
   };
 }
 

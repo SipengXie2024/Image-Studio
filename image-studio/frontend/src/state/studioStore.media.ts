@@ -18,6 +18,7 @@ import {
   buildPresetPatch,
   pickPresetStateSnapshot,
 } from "../lib/presets";
+import { collectHistoryBatchItems } from "../lib/batchCompareView";
 import { base64ToBlob, orderedNavigationItemsForCurrent } from "../lib/images";
 import { persistHistoryItems } from "../lib/storage";
 import type { HistoryItem, Preset, Toast } from "../types/domain";
@@ -81,6 +82,37 @@ export function createMediaActions(store: StateAdapter) {
         currentImage: state.currentImage ? toPreviewOnlyHistoryItem(state.currentImage) : null,
         workspaces: patchWorkspaceRuntime(state.workspaces, state.activeWorkspaceId, { resultGridOpen: false }),
       });
+    },
+
+    reopenBatchFromHistory(item: HistoryItem): boolean {
+      const state = store.getState();
+      const batchId = item.batchId?.trim();
+      if (!batchId) {
+        state.pushToast("这条记录没有批次信息，无法重新进入批次评审", "warn");
+        return false;
+      }
+      if (state.isRunning) {
+        state.pushToast("生成进行中，等本批完成后再重新进入历史批次", "warn");
+        return false;
+      }
+      // History pages load whole days at a time and a batch never spans days,
+      // so the right-clicked item's siblings are guaranteed to be loaded too.
+      const batchItems = collectHistoryBatchItems(state.history, batchId);
+      if (batchItems.length <= 1) {
+        state.pushToast("该批次在历史里只有一张图，无法进入批次对比；单击即可直接查看", "warn");
+        return false;
+      }
+      store.setState({
+        batchResults: batchItems.map((h) => toPreviewOnlyHistoryItem(h)),
+        resultGridOpen: true,
+        compareB: null,
+        currentImage: state.currentImage ? toPreviewOnlyHistoryItem(state.currentImage) : null,
+        workspaces: patchWorkspaceRuntime(state.workspaces, state.activeWorkspaceId, {
+          batchResultIds: batchItems.map((h) => h.id),
+          resultGridOpen: true,
+        }),
+      });
+      return true;
     },
 
     async selectBatchResult(item: HistoryItem) {

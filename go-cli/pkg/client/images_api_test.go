@@ -330,6 +330,159 @@ func TestRequestImagesAPIWithRetriesRetriesWhenOnlyPartialPreviewArrives(t *test
 	}
 }
 
+func TestImagesAPIRetriesOnceWithNonStreamingCompatWhenFinalImageIsMissing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(Options, func(string)) (ImageResult, string, error)
+	}{
+		{
+			name: "file",
+			run: func(opts Options, onLog func(string)) (ImageResult, string, error) {
+				return RequestAndExtractWithRetriesAndPartial(
+					context.Background(), nil, opts, t.TempDir(), "20260814-compat-file", onLog, nil, nil,
+				)
+			},
+		},
+		{
+			name: "memory",
+			run: func(opts Options, onLog func(string)) (ImageResult, string, error) {
+				return RequestAndExtractWithRetriesAndPartialInMemory(
+					context.Background(), nil, opts, onLog, nil, nil,
+				)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			finalB64 := base64.StdEncoding.EncodeToString([]byte("final"))
+			var bodies []map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode request body: %v", err)
+				}
+				bodies = append(bodies, body)
+				w.Header().Set("Content-Type", "application/json")
+				if len(bodies) == 1 {
+					_, _ = io.WriteString(w, `{}`)
+					return
+				}
+				fmt.Fprintf(w, `{"data":[{"b64_json":%q}]}`, finalB64)
+			}))
+			defer srv.Close()
+
+			autoRetryDisabled := false
+			var logs []string
+			result, raw, err := tc.run(Options{
+				APIKey:           "sk-test",
+				Prompt:           "cat",
+				BaseURL:          srv.URL,
+				APIMode:          APIModeImages,
+				ImageModelID:     "gpt-image-2",
+				AutoRetryEnabled: &autoRetryDisabled,
+			}, func(line string) {
+				logs = append(logs, line)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ImageB64 != finalB64 {
+				t.Fatalf("ImageB64 = %q", result.ImageB64)
+			}
+			if len(bodies) != 2 {
+				t.Fatalf("requests = %d, want 2", len(bodies))
+			}
+			if bodies[0]["stream"] != true {
+				t.Fatalf("first request should stream: %#v", bodies[0])
+			}
+			if _, ok := bodies[1]["stream"]; ok {
+				t.Fatalf("compat request should omit stream: %#v", bodies[1])
+			}
+			if bodies[1]["response_format"] != "b64_json" {
+				t.Fatalf("compat response_format = %#v", bodies[1]["response_format"])
+			}
+			if !strings.Contains(strings.Join(logs, "\n"), "非流式 b64_json 兼容模式") {
+				t.Fatalf("logs missing compat retry: %v", logs)
+			}
+			if tc.name == "file" && !strings.Contains(raw, "attempt2") {
+				t.Fatalf("raw path = %q, want distinct second attempt", raw)
+			}
+		})
+	}
+}
+
+func TestImagesAPIExplicitModerationErrorDoesNotTriggerCompatRetry(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"type":"error","error":{"code":"moderation_blocked","message":"blocked"}}`+"\n")
+	}))
+	defer srv.Close()
+
+	autoRetryDisabled := false
+	_, _, err := RequestAndExtractWithRetriesAndPartialInMemory(
+		context.Background(),
+		nil,
+		Options{
+			APIKey:           "sk-test",
+			Prompt:           "cat",
+			BaseURL:          srv.URL,
+			APIMode:          APIModeImages,
+			ImageModelID:     "gpt-image-2",
+			AutoRetryEnabled: &autoRetryDisabled,
+		},
+		nil,
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "内容审核拦截") {
+		t.Fatalf("err = %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("requests = %d, want 1", hits)
+	}
+}
+
+func TestImagesAPIFinalNoImageErrorIsChineseAndKeepsRawPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	autoRetryDisabled := false
+	_, rawPath, err := RequestAndExtractWithRetriesAndPartial(
+		context.Background(),
+		nil,
+		Options{
+			APIKey:             "sk-test",
+			Prompt:             "cat",
+			BaseURL:            srv.URL,
+			APIMode:            APIModeImages,
+			ImageModelID:       "gpt-image-2",
+			ImagesNewAPICompat: true,
+			AutoRetryEnabled:   &autoRetryDisabled,
+		},
+		t.TempDir(),
+		"20260814-final-no-image",
+		nil,
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "没有发现") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), ErrNoImageInResponse.Error()) {
+		t.Fatalf("English sentinel leaked: %v", err)
+	}
+	if rawPath == "" {
+		t.Fatal("raw path should be preserved")
+	}
+	if _, statErr := os.Stat(rawPath); statErr != nil {
+		t.Fatalf("raw path unavailable: %v", statErr)
+	}
+}
+
 func TestBuildEditsMultipartSetsMaskMimeType(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "source.png")

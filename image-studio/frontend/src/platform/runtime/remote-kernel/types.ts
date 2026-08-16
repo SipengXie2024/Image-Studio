@@ -113,6 +113,13 @@ export class RemoteKernelError extends Error {
   }
 }
 
+export class RemoteNoImageInResponseError extends RemoteKernelError {
+  constructor(rawPath: string | null = null) {
+    super("上游没有返回可用图片", rawPath);
+    this.name = "RemoteNoImageInResponseError";
+  }
+}
+
 export type NativeTextResponse = {
   status: number;
   body: string;

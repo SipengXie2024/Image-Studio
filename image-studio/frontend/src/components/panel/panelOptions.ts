@@ -1,13 +1,11 @@
 import type { QualityValue, SizeValue } from "../../types/domain";
 import { classifyImageModel } from "../../../../../shared/kernel/requestModel.js";
 
-export const STYLE_CHIPS: { id: string; label: string; hint: string }[] = [
-  { id: "cyberpunk", label: "赛博朋克", hint: "霓虹夜景" },
-  { id: "anime", label: "二次元", hint: "动画上色" },
-  { id: "illust", label: "插画", hint: "扁平绘制" },
-  { id: "3d", label: "3D 渲染", hint: "体积光泽" },
-  { id: "chinese", label: "国风", hint: "水墨意境" },
-];
+// Preset style chips removed on purpose: canned suffixes silently mutated the
+// submitted prompt, which conflicts with the taste-loop's verbatim-prompt
+// contract. Personal taste now comes from approved rules, not canned tags.
+// The styleTag field itself stays for persistence/preset compatibility.
+export const STYLE_CHIPS: { id: string; label: string; hint: string }[] = [];
 
 // auto 不展示具体方框形状,留给上游决定。
 export const ASPECT_OPTIONS: { value: SizeValue; label: string; w: number; h: number; auto?: boolean }[] = [

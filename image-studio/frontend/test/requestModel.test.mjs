@@ -33,6 +33,89 @@ test("prompt inference payload sends the canvas image and describe-only instruct
   assert.equal(payload.input[0].content[1].image_url, "data:image/png;base64,YWJj");
 });
 
+test("critic payload keeps evaluation input verbatim and never asks for prompt rewriting", () => {
+  const criticRequest = {
+    originalPrompt: "  keep  spacing  ",
+    responseSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["schemaVersion"],
+      properties: { schemaVersion: { const: 1 } },
+    },
+  };
+  const criticInput = ` \n${JSON.stringify(criticRequest, null, 2)}\n\t`;
+  const payload = buildPromptOptimizePayload({
+    prompt: criticInput,
+    mode: "critic",
+    textModelID: "gpt-5.5",
+  }, ["data:image/png;base64,YWJj"]);
+  assert.equal(payload.input[0].content[0].text, criticInput);
+  assert.match(payload.instructions, /never rewrite, expand, or improve the prompt/i);
+  assert.match(payload.instructions, /strict JSON only/i);
+  assert.equal(payload.input[0].content[1].image_url, "data:image/png;base64,YWJj");
+  assert.deepEqual(payload.text, {
+    format: {
+      type: "json_schema",
+      name: "taste_critic_response",
+      strict: true,
+      schema: criticRequest.responseSchema,
+    },
+  });
+});
+
+test("suggest payload keeps the request text verbatim and asks for plain prompt text only", () => {
+  const suggestInput = ` \n${JSON.stringify({
+    schemaVersion: 1,
+    operation: "suggest",
+    originalPrompt: "  keep  spacing  ",
+    rejectReason: "比例太成熟",
+  }, null, 2)}\n\t`;
+  const payload = buildPromptOptimizePayload({
+    prompt: suggestInput,
+    mode: "suggest",
+    textModelID: "gpt-5.5",
+  }, []);
+  assert.equal(payload.input[0].content[0].text, suggestInput);
+  assert.equal(payload.input[0].content.length, 1);
+  assert.match(payload.instructions, /rejection feedback and taste history/i);
+  assert.match(payload.instructions, /Only return the revised prompt text/i);
+  assert.match(payload.instructions, /same language as the original prompt/i);
+  assert.equal(payload.text, undefined);
+});
+
+test("critic payload rejects evaluation input without a strict response schema", () => {
+  assert.throws(
+    () => buildPromptOptimizePayload({ prompt: "{}", mode: "critic" }, []),
+    /responseSchema/,
+  );
+});
+
+test("Responses generation and edit payloads preserve prompt bytes", () => {
+  const prompt = " \n  keep\tall  spacing  \n\t";
+  const base = {
+    prompt,
+    size: "1024x1024",
+    quality: "low",
+    outputFormat: "png",
+    imageModelID: "gpt-image-2",
+    textModelID: "gpt-5.5",
+    requestPolicy: "openai",
+  };
+
+  const generation = buildResponsesPayload(base, []);
+  const edit = buildResponsesPayload(base, ["data:image/png;base64,YWJj"]);
+
+  assert.equal(generation.input[0].content[0].text, prompt);
+  assert.equal(edit.input[0].content[0].text, prompt);
+});
+
+test("Responses payload rejects a blank prompt without trimming a valid one", () => {
+  assert.throws(
+    () => buildResponsesPayload({ prompt: " \r\n\t" }, []),
+    /must not be blank/,
+  );
+});
+
 test("Responses payload defaults partial_images to streaming preview count", () => {
   const payload = buildResponsesPayload({
     prompt: "cat",

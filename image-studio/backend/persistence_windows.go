@@ -78,6 +78,9 @@ func WindowsLegacyWebviewUserDataPaths() ([]string, error) {
 	}
 	paths := make([]string, 0, 16)
 	add := func(path string) { paths = appendUniquePath(paths, path) }
+	if localAppData, cacheErr := os.UserCacheDir(); cacheErr == nil {
+		add(filepath.Join(localAppData, appConfigDirName, "WebView2"))
+	}
 	add(filepath.Join(cfg, windowsDefaultExecutableName))
 	if exe, err := os.Executable(); err == nil {
 		name := strings.TrimSpace(filepath.Base(exe))

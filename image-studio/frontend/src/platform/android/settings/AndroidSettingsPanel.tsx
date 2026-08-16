@@ -19,6 +19,7 @@ import {
   Save,
   Shield,
   SlidersHorizontal,
+  Sparkles,
   Sun,
   Trash2,
   Upload,
@@ -49,6 +50,7 @@ export type AndroidSettingsPanelProps = {
   onOpenRepo: () => void;
   onOpenUpstream: () => void;
   onPreviewCompletionSound: () => void;
+  onRescanTaste: () => void;
   onResetCompletionSound: () => void;
   onSelectCompletionSound: () => void;
   onSetActiveProfile: (id: string) => void;
@@ -122,6 +124,7 @@ export function AndroidSettingsPanel({
   onOpenRepo,
   onOpenUpstream,
   onPreviewCompletionSound,
+  onRescanTaste,
   onResetCompletionSound,
   onSelectCompletionSound,
   onSetActiveProfile,
@@ -498,6 +501,7 @@ export function AndroidSettingsPanel({
         <strong>{historyCountLabel}</strong>
       </div>
       <div className="android-settings-action-grid">
+        <button type="button" onClick={onRescanTaste}><Sparkles className="h-4 w-4" /> 归纳品味</button>
         <button type="button" onClick={exportHistory}><Upload className="h-4 w-4" /> 导出</button>
         <button type="button" onClick={importHistory}><Download className="h-4 w-4" /> 导入</button>
         <button type="button" onClick={() => pruneHistory(3)}>清理 3 天前</button>

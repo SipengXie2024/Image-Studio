@@ -4,6 +4,7 @@ import {
   FolderOpen,
   ImagePlus,
   Info,
+  LayoutGrid,
   RotateCcw,
   SlidersHorizontal,
   Split,
@@ -26,6 +27,7 @@ function IconForAction({ label }: { label: string }) {
   if (label.includes("raw")) return <FileText />;
   if (label.includes("应用参数")) return <SlidersHorizontal />;
   if (label.includes("重新生成")) return <RotateCcw />;
+  if (label.includes("批次")) return <LayoutGrid />;
   if (label.includes("源图")) return <ImagePlus />;
   if (label.includes("对比")) return <Split />;
   if (label.includes("删除")) return <Trash2 />;

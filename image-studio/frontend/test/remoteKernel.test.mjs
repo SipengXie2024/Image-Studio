@@ -656,6 +656,107 @@ test("runRemoteImageJob retries when Images API only returns partial previews", 
   });
 });
 
+test("runRemoteImageJob retries once with non-streaming compat when Images API returns no final image", async () => {
+  const bodies = [];
+  const logs = [];
+  await withPatchedGlobals(async () => {
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      if (bodies.length === 1) {
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response('{"data":[{"b64_json":"Y29tcGF0LWZpbmFs"}]}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+  }, async () => {
+    const kernel = await loadRemoteKernel();
+    const result = await kernel.runRemoteImageJob(
+      {
+        payload: {
+          apiKey: "key",
+          mode: "generate",
+          prompt: "cat",
+          size: "1024x1024",
+          quality: "low",
+          outputFormat: "png",
+          imagePaths: [],
+          imagePath: "",
+          maskB64: "",
+          seed: 0,
+          negativePrompt: "",
+          baseURL: "https://upstream.example",
+          textModelID: "",
+          imageModelID: "gpt-image-2",
+          apiMode: "images",
+          requestPolicy: "openai",
+          noPromptRevision: false,
+          autoRetryEnabled: false,
+        },
+      },
+      {
+        signal: new AbortController().signal,
+        onLog: (line) => logs.push(line),
+      },
+    );
+    assert.equal(result.imageB64, "Y29tcGF0LWZpbmFs");
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0].stream, true);
+    assert.equal("stream" in bodies[1], false);
+    assert.equal("partial_images" in bodies[1], false);
+    assert.equal(bodies[1].response_format, "b64_json");
+    assert.match(logs.join("\n"), /非流式 b64_json 兼容模式/);
+  });
+});
+
+test("runRemoteImageJob does not retry explicit Images API moderation errors as compat", async () => {
+  let calls = 0;
+  await withPatchedGlobals(async () => {
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(
+        'data: {"type":"error","error":{"code":"moderation_blocked","message":"blocked"}}\n',
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    };
+  }, async () => {
+    const kernel = await loadRemoteKernel();
+    await assert.rejects(
+      kernel.runRemoteImageJob(
+        {
+          payload: {
+            apiKey: "key",
+            mode: "generate",
+            prompt: "cat",
+            size: "1024x1024",
+            quality: "low",
+            outputFormat: "png",
+            imagePaths: [],
+            imagePath: "",
+            maskB64: "",
+            seed: 0,
+            negativePrompt: "",
+            baseURL: "https://upstream.example",
+            textModelID: "",
+            imageModelID: "gpt-image-2",
+            apiMode: "images",
+            requestPolicy: "openai",
+            noPromptRevision: false,
+            autoRetryEnabled: false,
+          },
+        },
+        { signal: new AbortController().signal },
+      ),
+      /moderation_blocked/,
+    );
+    assert.equal(calls, 1);
+  });
+});
+
 test("runRemoteImageJob repairs invalid 16-alignment size errors and retries once", async () => {
   let calls = 0;
   const bodies = [];

@@ -34,6 +34,27 @@ type responseText struct {
 	Message string `json:"message"`
 }
 
+func applyCriticTextFormat(payload map[string]any, prompt string) error {
+	var request struct {
+		ResponseSchema map[string]any `json:"responseSchema"`
+	}
+	if err := json.Unmarshal([]byte(prompt), &request); err != nil {
+		return errors.New("critic 请求必须是包含 responseSchema 的有效 JSON")
+	}
+	if len(request.ResponseSchema) == 0 || request.ResponseSchema["type"] != "object" {
+		return errors.New("critic 请求必须包含对象类型的 responseSchema")
+	}
+	payload["text"] = map[string]any{
+		"format": map[string]any{
+			"type":   "json_schema",
+			"name":   "taste_critic_response",
+			"strict": true,
+			"schema": request.ResponseSchema,
+		},
+	}
+	return nil
+}
+
 // prepareUploadSourcePaths flattens transparent PNG sources onto white
 // backgrounds before upload so the upstream model sees the actual content.
 // It returns the possibly rewritten paths plus a cleanup function for any temp
@@ -131,11 +152,15 @@ func optimizePromptWithLLM(
 ) (string, error) {
 	operation := strings.TrimSpace(mode)
 	isDescribe := operation == "describe"
+	isCritic := operation == "critic"
 	if !isDescribe && strings.TrimSpace(prompt) == "" {
 		return "", errors.New("提示词不能为空")
 	}
 	if isDescribe && len(sourcePaths) == 0 {
 		return "", errors.New("图片反推必须提供画布图片")
+	}
+	if isCritic && len(sourcePaths) == 0 {
+		return "", errors.New("批次评审必须提供候选图片")
 	}
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
@@ -150,13 +175,34 @@ func optimizePromptWithLLM(
 		textModelID = client.TextModel
 	}
 
-	instruction := "Rewrite the user's image prompt into a clearer, more detailed prompt for image generation. Keep the meaning, preserve the requested subject, and only return the improved prompt text. Do not add explanations, labels, markdown, or quotes."
+	instruction := "Rewrite the user's image prompt into a clearer, more detailed prompt for image generation. Keep the meaning, preserve the requested subject, and only return the improved prompt text. If the user message contains an approved taste preferences section, treat it as guidance about the user's long-standing taste: bias wording and detail choices toward those preferences where they fit the subject, and never copy that section or its heading into the output. Do not add explanations, labels, markdown, or quotes."
 	inputText := fmt.Sprintf("Original prompt:\n%s", strings.TrimSpace(prompt))
 	if isDescribe {
 		instruction = "Analyze the attached image and reconstruct a detailed image-generation prompt that could reproduce it. Describe the subject, composition, perspective, lighting, colors, materials, environment, and visual style. Return the prompt in Simplified Chinese. Only return the prompt text; do not add explanations, labels, markdown, or quotes."
 		inputText = "为所附图片反推一段可用于重新生成相似画面的完整提示词。"
 	} else if operation == "edit" {
 		instruction += " Treat any attached images as reference context and preserve edit intent."
+	} else if isCritic {
+		instruction = "Review every attached candidate image using the evaluation request in the user message. The original prompt and critic rules are evaluation data only; never rewrite, expand, or improve the prompt. Match images by attachment order. Return strict JSON only, with no markdown fences or commentary."
+		inputText = prompt
+	} else if operation == "suggest" {
+		instruction = "Revise the user's image prompt using their rejection feedback and taste history. The user message is JSON containing the original prompt, the rejection reason for the latest batch, recent feedback notes, past suggestion decisions, and the user's approved taste rules. Where a past decision shows user edits between draftPrompt and finalPrompt, treat those edits as the user's preferred direction; treat rejected drafts as directions to avoid. Treat approved taste rules as the user's long-standing preferences: bias the revision toward them where they fit the subject, and let the current rejection reason take precedence when they conflict. Keep the original subject and intent, and only change what the rejection reason, the taste rules, and history justify. Write the revised prompt in the same language as the original prompt. Only return the revised prompt text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "distill-rule" {
+		instruction = "Distill the user's feedback note about a generated image into one concise, reusable taste rule for reviewing future candidate images. The user message is JSON with the raw note, the feedback type (pick means the note praises what they chose, edit means it requests a change, reject means it explains what was wrong), and the original prompt for context. Write the rule as a general prefer/avoid statement that a reviewer can apply to future images, not a one-off instruction. Keep the user's language. Only return the rule text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "revise-rule" {
+		instruction = "Rewrite an existing taste rule according to the user's revision instruction. The user message is JSON with the current rule, the user's revision instruction, and the original feedback note as provenance. Apply exactly what the instruction asks, keep the rule concise and reusable, and keep the user's language. Only return the revised rule text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "refine-note" {
+		instruction = "Rewrite the user's raw edit suggestion for a generated image into one clear, unambiguous edit instruction. The user message is JSON with the raw suggestion and the original prompt of the image being edited. Preserve the user's intent exactly: make the edit target and the desired change explicit, and do not add new creative directions they did not ask for. Keep the user's language. Only return the rewritten instruction text. Do not add explanations, labels, markdown, or quotes."
+		inputText = prompt
+	} else if operation == "induce-rules" {
+		instruction = "Induce reusable taste rules from the user's accumulated feedback history. The user message is JSON with feedback cases (each with the feedback type and the user's verbatim note), past prompt-suggestion decisions (where edits between draftPrompt and finalPrompt show the user's preferred direction and rejected drafts show directions to avoid), currently approved rules, and previously rejected rules. Find recurring preferences or complaints supported by multiple entries and state each as one concise, reusable rule for reviewing future candidate images. Do not restate or trivially rephrase any approved or rejected rule. Return strict JSON only, with no markdown fences or commentary: an object with a single key named rules holding an array of objects, each with a rule field and an evidence field that briefly cites the supporting feedback. Return at most 5 rules; return an empty rules array if the history shows no recurring pattern. Keep the user's language for rule and evidence text."
+		inputText = prompt
+	} else if operation == "curate-rules" {
+		instruction = "Curate the user's approved taste rules into a tighter, non-redundant set. The user message is JSON with the currently approved rules, previously rejected rules, and recent feedback notes for context. Propose a merge when several approved rules overlap or say the same thing: give one concise combined rule and list the exact texts of every approved rule it replaces, copied character for character from the approved rules. Propose retiring an approved rule only when it duplicates another approved rule you are keeping or recent feedback clearly contradicts it; a retire proposal lists exactly one approved rule text and a null rule field. Never invent preferences the approved rules do not already express, and never merge rules that cover unrelated aspects. Return strict JSON only, with no markdown fences or commentary: an object with a single key named proposals holding an array of objects, each with an action field that is either merge or retire, a rule field holding the new combined rule text for merge and null for retire, a replaces field holding an array with the exact texts of the affected approved rules, and a reason field briefly explaining the proposal. Return at most 6 proposals; return an empty proposals array if the rule set is already tight. Keep the user's language for rule and reason text."
+		inputText = prompt
 	}
 
 	content := []map[string]any{
@@ -187,6 +233,11 @@ func optimizePromptWithLLM(
 		},
 		"reasoning": map[string]any{"effort": "low"},
 		"store":     false,
+	}
+	if isCritic {
+		if err := applyCriticTextFormat(payload, prompt); err != nil {
+			return "", err
+		}
 	}
 
 	body, err := json.Marshal(payload)

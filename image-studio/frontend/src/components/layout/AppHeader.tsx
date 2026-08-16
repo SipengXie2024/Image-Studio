@@ -1,4 +1,4 @@
-import { Github, Monitor, Moon, Plus, Settings, Star, Sun } from "lucide-react";
+import { Github, Monitor, Moon, Plus, Settings, Sparkles, Star, Sun } from "lucide-react";
 import { useStudioStore } from "../../state/studioStore";
 import { OpenExternalURL } from "../../platform/runtime/host";
 import { usePlatform } from "../../platform/context";
@@ -9,7 +9,7 @@ import { HeaderIconBtn, HeaderToggleBtn } from "./headerPrimitives";
 const REPO_URL = "https://github.com/RoseKhlifa/Image-Studio";
 
 export function AppHeader({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { fullscreen, theme, setTheme, pushToast, workspaces, newWorkspace, openStarPrompt } = useStudioStore();
+  const { fullscreen, theme, setTheme, pushToast, workspaces, newWorkspace, openStarPrompt, openTastePanel } = useStudioStore();
   const { isAndroid, isAndroidPhone, isAndroidPad, isMac, usesFluentUI, usesAndroidUI, usesAppleUI } = usePlatform();
   if (fullscreen) return null;
 
@@ -83,6 +83,12 @@ export function AppHeader({ onOpenSettings }: { onOpenSettings: () => void }) {
         >
           <Star className="h-4 w-4 text-amber-500 dark:text-amber-400" fill="currentColor" strokeWidth={1.5} />
         </HeaderIconBtn>}
+        <HeaderIconBtn
+          onClick={openTastePanel}
+          title="Harness 学到了什么"
+        >
+          <Sparkles className="h-4 w-4 text-[var(--accent)]" />
+        </HeaderIconBtn>
         <HeaderIconBtn
           onClick={onOpenSettings}
           title="设置"

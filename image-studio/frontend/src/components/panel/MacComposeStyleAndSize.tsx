@@ -76,31 +76,6 @@ export function MacComposeStyleAndSize({
 
   return (
     <>
-      <div>
-        <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[12px] text-zinc-500">风格</span>
-          {styleTag ? (
-            <button onClick={() => setField("styleTag", "")} className="text-[12px] text-[var(--accent)] hover:opacity-80">清除</button>
-          ) : null}
-        </div>
-        <div className="mac-style-chips">
-          {STYLE_CHIPS.map((style) => {
-            const active = styleTag === style.id;
-            return (
-              <button
-                key={style.id}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setField("styleTag", active ? "" : style.id)}
-                className={`mac-style-pill ${active ? "active" : ""}`}
-              >
-                <span>{style.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {mode === "edit" ? (
         <div>
           <div className="mb-2 text-[12px] text-zinc-500">源图尺寸策略</div>

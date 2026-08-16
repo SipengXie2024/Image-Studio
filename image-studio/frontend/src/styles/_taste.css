@@ -1,0 +1,432 @@
+/* Taste-loop UI (feedback modals + prompt retry card).
+   Hand-written unlayered rules on purpose — layered Tailwind utilities have been
+   observed not rendering for these buttons inside the Windows WebView build,
+   while unlayered classes (see .batch-grid-*) render fine. Keep these unlayered. */
+
+.taste-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+    opacity 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.taste-btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+.taste-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.taste-btn svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.taste-btn-primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.taste-btn-primary:hover:not(:disabled) {
+  background: var(--accent-2);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.taste-btn-ghost {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+.taste-btn-ghost:hover:not(:disabled) {
+  color: var(--text);
+  /* Plain-color fallback first: color-mix() needs Chromium ≥111 and some
+     pinned WebView2 runtimes drop the whole declaration otherwise. */
+  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.taste-btn-danger {
+  border-color: rgb(239 68 68 / 0.45);
+  border-color: color-mix(in srgb, #ef4444 45%, var(--border));
+  background: rgb(239 68 68 / 0.08);
+  background: color-mix(in srgb, #ef4444 8%, var(--surface));
+  color: #dc2626;
+}
+.taste-btn-danger:hover:not(:disabled) {
+  background: rgb(239 68 68 / 0.16);
+  background: color-mix(in srgb, #ef4444 16%, var(--surface));
+}
+html.dark .taste-btn-danger {
+  color: #fca5a5;
+}
+
+html[data-ui-family="android"] .taste-btn {
+  min-height: 44px;
+}
+
+@media (max-width: 639px) {
+  .taste-modal-actions {
+    flex-direction: column-reverse;
+    flex-wrap: nowrap;
+    align-items: stretch;
+  }
+  .taste-modal-actions-group {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .taste-modal-actions .taste-btn {
+    width: 100%;
+  }
+}
+
+.taste-btn-sm {
+  min-height: 30px;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+html[data-ui-family="android"] .taste-btn-sm {
+  min-height: 40px;
+}
+
+.taste-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(127 127 127 / 0.06);
+}
+.taste-tab {
+  flex: 1 1 0;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.taste-tab:hover {
+  color: var(--text);
+}
+.taste-tab.active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.14);
+}
+
+.taste-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.taste-stat {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgb(127 127 127 / 0.05);
+}
+.taste-stat-value {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  color: var(--text);
+}
+.taste-stat-label {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.taste-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.taste-list-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.taste-list-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.taste-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+.taste-chip-danger {
+  background: rgb(239 68 68 / 0.12);
+  color: #dc2626;
+}
+html.dark .taste-chip-danger {
+  color: #fca5a5;
+}
+.taste-chip-muted {
+  background: rgb(127 127 127 / 0.12);
+  color: var(--text-muted);
+}
+
+.taste-source-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.taste-source-thumb-btn {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.taste-source-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.taste-source-thumb-btn:hover .taste-source-thumb {
+  border-color: var(--accent);
+  transform: scale(1.04);
+}
+/* Keep-for-next-round checkbox overlaid on a reference thumbnail. */
+.taste-source-keep {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+.taste-source-keep input[type="checkbox"] {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 1;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.taste-source-keep.kept .taste-source-thumb {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.taste-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgb(0 0 0 / 0.78);
+  cursor: zoom-out;
+}
+.taste-lightbox-img {
+  max-width: 92vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
+}
+.taste-lightbox-name {
+  color: rgb(255 255 255 / 0.85);
+  font-size: 12px;
+}
+
+.taste-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 4px;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  border-top: 1px solid var(--border);
+}
+.taste-group-toggle:hover {
+  color: var(--text);
+}
+
+.taste-quote-block {
+  max-height: 112px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--border);
+  border-radius: 4px 12px 12px 4px;
+  background: rgb(127 127 127 / 0.08);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.taste-budget-banner {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid rgb(217 119 6 / 0.7);
+  border-radius: 4px 12px 12px 4px;
+  background: rgb(245 158 11 / 0.12);
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgb(180 83 9);
+  word-break: break-word;
+}
+html.dark .taste-budget-banner {
+  color: rgb(252 211 77);
+}
+
+.taste-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.taste-modal-actions-split {
+  justify-content: space-between;
+}
+.taste-modal-actions-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+@keyframes taste-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.taste-retry-card {
+  position: fixed;
+  right: 16px;
+  bottom: 64px;
+  z-index: 30;
+  width: 302px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.3), 0 2px 8px rgb(0 0 0 / 0.16);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow: hidden;
+  animation: taste-card-in 0.22s ease;
+}
+.taste-retry-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent), transparent 80%);
+  opacity: 0.85;
+}
+.taste-retry-card-title {
+  margin: 0 0 2px;
+  font-weight: 600;
+}
+.taste-retry-card-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.taste-retry-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.taste-retry-card-actions .taste-btn {
+  width: 100%;
+}
+
+html[data-platform="android"] .taste-retry-card {
+  /* Clear the bottom navigation (min-height 80px + safe-area) on gesture-nav devices. */
+  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Source thumbnail remove button — unlayered for the same reason as .taste-btn:
+   its layered bg-zinc-950/70 utility does not render in the Windows WebView,
+   leaving a white X invisible on light thumbnails. */
+.source-remove-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(9 9 11 / 0.7);
+  color: #fff;
+  border-bottom-left-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+.group:hover .source-remove-btn,
+.source-remove-btn:focus-visible {
+  opacity: 1;
+}
+.source-remove-btn:hover {
+  background: #ef4444;
+}
+.source-remove-btn svg {
+  width: 10px;
+  height: 10px;
+}

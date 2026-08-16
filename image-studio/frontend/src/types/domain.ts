@@ -208,6 +208,9 @@ export interface HistoryItem {
   previewBlob?: Blob | null;
   previewOnly?: boolean;
   prompt: string;
+  originalPrompt?: string;
+  submittedPrompt?: string;
+  promptProvenance?: "verbatim" | "user-controls";
   revisedPrompt?: string;
   mode: Mode;
   size: SizeValue;
@@ -227,12 +230,41 @@ export interface HistoryItem {
   moderation?: ModerationValue;
   styleTag?: string;
   batchIndex?: number;
+  batchId?: string;
+  tasteReview?: TasteReview;
   previewSlotIndex?: number;
   elapsedSec?: number;     // generation duration in seconds
 
   sourcePaths?: string[];
   savedPath?: string;
   rawPath?: string;
+}
+
+export interface TasteReview {
+  schemaVersion: 1;
+  criticRulesVersion: string;
+  // Learning provenance shown to the user ("N approved rules + M exemplars
+  // were applied"); optional so pre-existing persisted reviews stay valid.
+  appliedRuleCount?: number;
+  appliedExemplarCount?: number;
+  reviewedAt: number;
+  score: number;
+  summary: string;
+  strengths: string[];
+  issues: string[];
+  observations: {
+    multiplePrimarySubjects: boolean;
+    multiViewLayout: boolean;
+  };
+  hardGate: {
+    kind: "single-subject-single-view";
+    enabled: boolean;
+    rationale: string;
+  };
+  disqualified: boolean;
+  disqualificationReasons: Array<"multiple-primary-subjects" | "multi-view-layout">;
+  rank: number | null;
+  top3: boolean;
 }
 
 export interface ProgressInfo {

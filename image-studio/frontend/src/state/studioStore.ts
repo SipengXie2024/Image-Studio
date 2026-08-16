@@ -55,6 +55,15 @@ import {
   UpstreamProfile,
   Workspace,
 } from "../types/domain";
+import { assertPromptByteIdentity } from "../lib/tasteLearning";
+import { withApprovedTastePreferences } from "../lib/promptSuggestion";
+import {
+  advanceTasteGenerationRound,
+  planTasteCriticReplacements,
+  resolveEditTasteCriticHardGate,
+  shouldRunTasteCriticLoop,
+  type TasteCriticHardGate,
+} from "../lib/tasteCritic";
 import {
   clearLegacyAPIKeys,
   loadLegacyModeAPIKey,
@@ -155,7 +164,7 @@ import {
   supportsPreciseSizeControl,
 } from "../components/panel/sizeCapabilities";
 import { normalizeQualitySelection } from "../components/panel/panelOptions";
-import { buildMacWorkspacePreview, buildWindowsRightRailPreview, readPreviewScenario } from "../app/dev/previewData";
+import { buildBatchComparePreview, buildMacWorkspacePreview, buildWindowsRightRailPreview, readPreviewScenario } from "../app/dev/previewData";
 import {
   applyTheme,
   augmentPromptWithAnnotations,
@@ -183,13 +192,16 @@ import {
   ensureFullHistoryItem as ensureFullHistoryItemRuntime,
   historyItemsByIds,
   materializeHistoryItem as materializeHistoryItemRuntime,
-  STYLE_SUFFIXES,
   withMediaAssetRef,
 } from "./studioStore.runtime";
 import { createMediaActions } from "./studioStore.media";
 import { createProfileActions } from "./studioStore.profiles";
 import { createWorkspaceActions } from "./studioStore.workspaces";
 import { createImageActions } from "./studioStore.images";
+import { createTasteActions } from "./studioStore.taste";
+import { createTasteCriticActions } from "./studioStore.critic";
+import { createPromptSuggestionActions } from "./studioStore.suggestion";
+import { createTasteRuleActions } from "./studioStore.tasteRules";
 import { saveHistoryItemToDirectory, saveHistoryItemToDirectoryAs } from "../lib/saveResultImage";
 import {
   currentImageIdForWorkspaceSnapshot,
@@ -206,6 +218,10 @@ type RuntimeGenerateOptions = GenerateOptionsLike & {
 
 type JobSnapshot = {
   workspaceId: string;
+  batchId: string;
+  originalPrompt: string;
+  submittedPrompt: string;
+  promptProvenance: "verbatim" | "user-controls";
   apiMode: APIModeValue;
   batchIndex: number;
   previewSlotIndex?: number;
@@ -247,6 +263,61 @@ type LoopRunController = {
 };
 
 const loopRunControllers = new Map<string, LoopRunController>();
+
+type TasteReplacementContext = {
+  workspaceId: string;
+  batchId: string;
+  mode: string;
+  payload: RuntimeGenerateOptions;
+  snapshotBase: Omit<JobSnapshot, "batchIndex">;
+  initialCount: number;
+  attempted: boolean;
+  roundTotal: number;
+  roundSettled: number;
+  roundSucceeded: number;
+  hardGateOverride?: TasteCriticHardGate;
+};
+
+const tasteReplacementContexts = new Map<string, TasteReplacementContext>();
+let tasteAutoReviewQueue: Promise<void> = Promise.resolve();
+
+function enqueueTasteAutoReview(batchId: string, items: HistoryItem[]): void {
+  tasteAutoReviewQueue = tasteAutoReviewQueue
+    .catch(() => undefined)
+    .then(() => reviewTasteBatchAndMaybeReplace(batchId, items));
+}
+
+function settleTasteGenerationRound(batchId: string, status: "success" | "error"): void {
+  const context = tasteReplacementContexts.get(batchId);
+  if (!context) return;
+  const round = advanceTasteGenerationRound({
+    total: context.roundTotal,
+    settled: context.roundSettled,
+    succeeded: context.roundSucceeded,
+  }, status);
+  context.roundSettled = round.settled;
+  context.roundSucceeded = round.succeeded;
+  if (round.settled < round.total) return;
+
+  const completedBatch = useStudioStore.getState().history
+    .filter((item) => item.batchId === batchId)
+    .sort((left, right) => (left.batchIndex ?? 0) - (right.batchIndex ?? 0));
+  if (completedBatch.length === 0) {
+    tasteReplacementContexts.delete(batchId);
+    return;
+  }
+  if (context.attempted && round.succeeded === 0) {
+    const eligible = completedBatch.filter((item) => item.tasteReview && !item.tasteReview.disqualified).length;
+    useStudioStore.getState().pushToast(
+      `补抽图片全部失败，当前仍只有 ${eligible}/${Math.min(3, context.initialCount)} 张通过硬门`,
+      "warn",
+      7000,
+    );
+    tasteReplacementContexts.delete(batchId);
+    return;
+  }
+  enqueueTasteAutoReview(batchId, completedBatch);
+}
 
 function stopLoopRun(workspaceId: string): void {
   const controller = loopRunControllers.get(workspaceId);
@@ -616,6 +687,50 @@ const imageActions = createImageActions({
   },
 });
 
+const tasteActions = createTasteActions({
+  getState: () => useStudioStore.getState(),
+  setState: (patch) => {
+    if (typeof patch === "function") {
+      useStudioStore.setState((state) => patch(state));
+      return;
+    }
+    useStudioStore.setState(patch);
+  },
+});
+
+const tasteCriticActions = createTasteCriticActions({
+  getState: () => useStudioStore.getState(),
+  setState: (patch) => {
+    if (typeof patch === "function") {
+      useStudioStore.setState((state) => patch(state));
+      return;
+    }
+    useStudioStore.setState(patch);
+  },
+});
+
+const promptSuggestionActions = createPromptSuggestionActions({
+  getState: () => useStudioStore.getState(),
+  setState: (patch) => {
+    if (typeof patch === "function") {
+      useStudioStore.setState((state) => patch(state));
+      return;
+    }
+    useStudioStore.setState(patch);
+  },
+});
+
+const tasteRuleActions = createTasteRuleActions({
+  getState: () => useStudioStore.getState(),
+  setState: (patch) => {
+    if (typeof patch === "function") {
+      useStudioStore.setState((state) => patch(state));
+      return;
+    }
+    useStudioStore.setState(patch);
+  },
+});
+
 export const useStudioStore = create<StudioState>((set, get) => ({
   apiKey: "",
   mode: "generate",
@@ -675,6 +790,26 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   resultGridOpen: false,
   historyRailCollapsed: false,
   historyTimelineOpen: false,
+  tasteProfile: {
+    schemaVersion: 1,
+    candidates: [],
+    approvedCandidateIds: [],
+    updatedAt: 0,
+    bootstrapAcknowledged: false,
+  },
+  tasteBootstrapOpen: false,
+  tasteLoading: false,
+  tasteCriticRunning: false,
+  tasteCriticError: null,
+  tasteCriticBatchId: null,
+  promptRetryOffer: null,
+  promptSuggestion: null,
+  promptSuggestionDrafting: false,
+  promptSuggestionSubmitting: false,
+  tasteRuleBusyId: null,
+  editNoteRefining: false,
+  tastePanelOpen: false,
+  ruleCuration: null,
 
   tool: "pan",
   brushSize: 30,
@@ -1132,7 +1267,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   clearSources: () => imageActions.clearSources(),
   reorderSources: (from, to) => imageActions.reorderSources(from, to),
 
-  submit: async () => {
+  submit: async (options) => {
     const s = get();
     if (s.isRunning) return;
     if (!s.apiKey.trim()) {
@@ -1153,7 +1288,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const loopGeneration = normalizeLoopGenerationConfig(s.loopGeneration);
     const batchProcessActive = batchProcess.enabled || !!batchProcess.inputDir.trim() || batchProcess.discoveredSources.length > 0;
     const batchProcessEnabled = s.mode === "edit" && s.editSourceMode === "batch" && batchProcessActive;
-    const loopEnabled = !batchProcessEnabled && loopGeneration.enabled;
+    const loopEnabled = !options?.disableLoop && !batchProcessEnabled && loopGeneration.enabled;
     const requestedJobCount = loopEnabled
       ? normalizeLoopGenerationCount(loopGeneration.totalCount)
       : batchProcessEnabled
@@ -1267,6 +1402,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       ...runPatch,
       batchCount,
       batchResults: [],
+      promptRetryOffer: null,
+      promptSuggestion: null,
       resultGridOpen: requestedJobCount > 1,
       compareB: null,
       currentImage: clearCurrentForNewRun ? null : s.currentImage,
@@ -1288,12 +1425,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         : importedMaskDataURL)
       : null;
     const maskB64 = maskDataURL ? stripDataURLPrefix(maskDataURL) : "";
-    let augmentedPrompt = augmentPromptWithAnnotations(s.prompt, s.annotations, s.currentImage?.imageB64 ? imageDims(s.currentImage.imageB64) : null);
-    // Append style chip suffix if the user picked one (other than "全部").
-    const styleSuffix = STYLE_SUFFIXES[s.styleTag];
-    if (styleSuffix) {
-      augmentedPrompt = `${augmentedPrompt}, ${styleSuffix}`;
-    }
+    const augmentedPrompt = augmentPromptWithAnnotations(s.prompt, s.annotations, s.currentImage?.imageB64 ? imageDims(s.currentImage.imageB64) : null);
+    const promptProvenance = options?.promptProvenance === "user-controls"
+      ? "user-controls"
+      : augmentedPrompt === s.prompt ? "verbatim" : "user-controls";
+    if (promptProvenance === "verbatim") assertPromptByteIdentity(s.prompt, augmentedPrompt);
 
     const normalizedBaseSize = normalizeSizeSelection(s.size, {
       apiMode: s.apiMode,
@@ -1417,6 +1553,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
     const snapshotBase = {
       workspaceId,
+      batchId: `batch-${cryptoIDFallback()}`,
+      originalPrompt: s.prompt,
+      submittedPrompt: augmentedPrompt,
+      promptProvenance,
       apiMode: s.apiMode,
       size: resolvedSize,
       quality: resolvedQuality,
@@ -1427,6 +1567,32 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       loopGeneration,
       editSourceMode: s.editSourceMode,
     } as const;
+
+    for (const [batchId, context] of tasteReplacementContexts) {
+      if (context.workspaceId === workspaceId) tasteReplacementContexts.delete(batchId);
+    }
+    if (shouldRunTasteCriticLoop(s.mode, requestedJobCount, loopEnabled, batchProcessEnabled)) {
+      const hardGateOverride = s.mode === "edit" && s.currentImage
+        ? resolveEditTasteCriticHardGate({
+            editPrompt: s.prompt,
+            sourceHardGate: s.currentImage.tasteReview?.hardGate,
+            sourceOriginalPrompt: s.currentImage.originalPrompt ?? s.currentImage.prompt,
+          })
+        : undefined;
+      tasteReplacementContexts.set(snapshotBase.batchId, {
+        workspaceId,
+        batchId: snapshotBase.batchId,
+        mode: s.mode,
+        payload: remotePayload,
+        snapshotBase,
+        initialCount: requestedJobCount,
+        attempted: false,
+        roundTotal: requestedJobCount,
+        roundSettled: 0,
+        roundSucceeded: 0,
+        hardGateOverride,
+      });
+    }
 
     if (batchProcessEnabled) {
       const controller: LoopRunController = {
@@ -1469,7 +1635,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       };
       loopRunControllers.set(workspaceId, controller);
       launchQueuedLoopJobs(controller);
-      return;
+      return { batchId: snapshotBase.batchId };
     }
 
     for (let i = 0; i < batchCount; i++) {
@@ -1479,8 +1645,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         ...snapshotBase,
         batchIndex: i,
         previewSlotIndex: i,
+      }, {
+        onSettled: (status) => settleTasteGenerationRound(snapshotBase.batchId, status),
       });
     }
+    return { batchId: snapshotBase.batchId };
   },
 
   cancel: async () => {
@@ -1522,17 +1691,29 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   bootstrap: async () => {
     const previewScenario = readPreviewScenario();
-    if (previewScenario === "mac-workspace" || previewScenario === "windows-right-rail") {
+    if (previewScenario === "mac-workspace" || previewScenario === "windows-right-rail" || previewScenario === "batch-compare") {
       const workspaceId = genId();
       const preview = previewScenario === "windows-right-rail"
         ? buildWindowsRightRailPreview(workspaceId)
-        : buildMacWorkspacePreview(workspaceId);
+        : previewScenario === "batch-compare"
+          ? buildBatchComparePreview(workspaceId)
+          : buildMacWorkspacePreview(workspaceId);
+      const batchPreviewResults = previewScenario === "batch-compare"
+        ? preview.history.slice(0, 6)
+        : [];
       await SetKeepLogsEnabled(readKeepLogs()).catch(() => undefined);
       await SetCleanupPreviewCacheOnExitEnabled(readCleanupPreviewCacheOnExit()).catch(() => undefined);
-      applyTheme(previewScenario === "windows-right-rail" ? "light" : "dark");
+      applyTheme(previewScenario === "mac-workspace" ? "dark" : "light");
       document.documentElement.style.setProperty("--font-scale", "1");
       setKernelRuntimeMode("auto");
-      const workspaceState = preview.workspace;
+      const workspaceState = batchPreviewResults.length > 1
+        ? {
+            ...preview.workspace,
+            currentImageId: batchPreviewResults[0]?.id ?? preview.workspace.currentImageId,
+            batchResultIds: batchPreviewResults.map((item) => item.id),
+            resultGridOpen: true,
+          }
+        : preview.workspace;
       set({
         apiKey: "sk-preview",
         mode: workspaceState.mode,
@@ -1578,13 +1759,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         isRunning: false,
         lastPayload: null,
         runningJobMeta: {},
-        currentImage: preview.currentImage,
+        currentImage: batchPreviewResults[0] ?? preview.currentImage,
         history: preview.history,
         historyHasMore: false,
         historyLoading: false,
         historyCursorBeforeDayStart: null,
-        batchResults: [],
-        resultGridOpen: false,
+        batchResults: batchPreviewResults,
+        resultGridOpen: batchPreviewResults.length > 1,
         historyRailCollapsed: false,
         historyTimelineOpen: false,
         tool: "pan",
@@ -1613,7 +1794,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         loopGeneration: normalizeLoopGenerationConfig(workspaceState.loopGeneration),
         presets: preview.presets ?? [],
         customAspectRatios: [],
-        theme: previewScenario === "windows-right-rail" ? "light" : "dark",
+        theme: previewScenario === "mac-workspace" ? "dark" : "light",
         fontScale: 1,
         workspaces: [workspaceState],
         activeWorkspaceId: workspaceId,
@@ -1968,6 +2149,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     }).catch(() => undefined);
     enableCompatibilityExport();
     void backfillHistoryPreviewRefs(items);
+    void get().bootstrapTaste();
   },
 
   importMaskImage: async () => {
@@ -2112,6 +2294,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setCompareSplit: (v) => mediaActions.setCompareSplit(v),
   openResultGrid: () => mediaActions.openResultGrid(),
   closeResultGrid: () => mediaActions.closeResultGrid(),
+  reopenBatchFromHistory: (item) => mediaActions.reopenBatchFromHistory(item),
   selectBatchResult: async (item) => mediaActions.selectBatchResult(item),
   stepBatchResult: async (delta) => mediaActions.stepBatchResult(delta),
   pushToast: (text, kind = "info", ttl = 3500, action) => mediaActions.pushToast(text, kind, ttl, action),
@@ -2155,6 +2338,40 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     mediaActions.openHistoryTimeline();
   },
   closeHistoryTimeline: () => mediaActions.closeHistoryTimeline(),
+  bootstrapTaste: async () => tasteActions.bootstrapTaste(),
+  rescanTasteHistory: async () => tasteActions.rescanTasteHistory(),
+  refreshTasteProfile: async () => tasteActions.refreshTasteProfile(),
+  decideTasteCandidate: async (candidateId, decision) => tasteActions.decideTasteCandidate(candidateId, decision),
+  acknowledgeTasteBootstrap: async () => tasteActions.acknowledgeTasteBootstrap(),
+  closeTasteBootstrap: () => tasteActions.closeTasteBootstrap(),
+  pickBatchResult: async (item) => tasteActions.pickBatchResult(item),
+  editBatchResult: async (input) => tasteActions.editBatchResult(input),
+  rejectBatch: async (input) => tasteActions.rejectBatch(input),
+  reviewBatchWithTasteCritic: async (options) => tasteCriticActions.reviewBatchWithTasteCritic(options),
+  draftPromptSuggestion: async () => promptSuggestionActions.draftPromptSuggestion(),
+  decidePromptSuggestion: async (input) => promptSuggestionActions.decidePromptSuggestion(input),
+  dismissPromptRetryOffer: () => promptSuggestionActions.dismissPromptRetryOffer(),
+  closePromptSuggestion: () => promptSuggestionActions.closePromptSuggestion(),
+  refineEditNote: async (input) => promptSuggestionActions.refineEditNote(input),
+  updateCandidateRule: async (candidateId, ruleText) => tasteRuleActions.updateCandidateRule(candidateId, ruleText),
+  distillCandidateRule: async (candidateId) => tasteRuleActions.distillCandidateRule(candidateId),
+  reviseCandidateRule: async (candidateId, instruction) => tasteRuleActions.reviseCandidateRule(candidateId, instruction),
+  induceRulesFromHistory: async () => tasteRuleActions.induceRulesFromHistory(),
+  curateRules: async () => tasteRuleActions.curateRules(),
+  settleRuleCurationItem: (key) => {
+    const current = get().ruleCuration;
+    if (!current) return;
+    const items = current.items.filter((item) => item.key !== key);
+    if (items.length > 0) {
+      set({ ruleCuration: { items } });
+      return;
+    }
+    set({ ruleCuration: null });
+    get().pushToast("规则库整理完成;所有变化都已按你的决定生效", "success", 5000);
+  },
+  closeRuleCuration: () => set({ ruleCuration: null }),
+  openTastePanel: () => set({ tastePanelOpen: true }),
+  closeTastePanel: () => set({ tastePanelOpen: false }),
   pruneHistoryOlderThanDays: async (days) => mediaActions.pruneHistoryOlderThanDays(days),
   rotateCurrent: async (degrees) => mediaActions.rotateCurrent(degrees),
   flipCurrent: async (horizontal) => mediaActions.flipCurrent(horizontal),
@@ -2256,11 +2473,19 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     if (s.mode === "edit" && sourcePaths.length === 0 && s.currentImage?.savedPath) {
       sourcePaths.push(s.currentImage.savedPath);
     }
+    // Approved taste rules ride along as a marked guidance section; the result
+    // is still a draft the user sees and edits before any generation submit.
+    const approvedTaste = withApprovedTastePreferences(
+      s.prompt,
+      s.tasteProfile.candidates
+        .filter((candidate) => candidate.status === "approved")
+        .map((candidate) => candidate.rule),
+    );
     set({ isOptimizingPrompt: true, errorMessage: null, errorCanRetry: false, errorRawPath: null });
     try {
       const optimized = await wailsOptimizePrompt({
         apiKey,
-        prompt: s.prompt,
+        prompt: approvedTaste.text,
         mode: s.mode,
         baseURL,
         textModelID: aiProfile.textModelID.trim(),
@@ -2274,7 +2499,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const trimmed = optimized.trim();
       if (!trimmed) throw new Error("上游没有返回可用的优化结果");
       set({ prompt: trimmed });
-      s.pushToast(`已通过「${aiProfile.name}」优化提示词`, "success");
+      s.pushToast(
+        approvedTaste.appliedRuleCount > 0
+          ? `已通过「${aiProfile.name}」优化提示词(结合了 ${approvedTaste.appliedRuleCount} 条口味规则)`
+          : `已通过「${aiProfile.name}」优化提示词`,
+        "success",
+      );
     } catch (e: any) {
       const msg = `优化失败:${e?.message ?? e}`;
       set({ errorMessage: msg, errorCanRetry: false, errorRawPath: null });
@@ -2540,6 +2770,9 @@ async function launchOneJob(
             previewBlob: null,
             previewOnly: true,
             prompt: r.prompt,
+            originalPrompt: snapshot.originalPrompt,
+            submittedPrompt: snapshot.submittedPrompt,
+            promptProvenance: snapshot.promptProvenance,
             revisedPrompt: r.revisedPrompt,
             mode: r.mode as Mode,
             size: snapshot.size,
@@ -2556,8 +2789,12 @@ async function launchOneJob(
             moderation: payload.moderation === "auto" ? "auto" : "low",
             styleTag: snapshot.styleTag || undefined,
             batchIndex: snapshot.batchIndex,
+            batchId: snapshot.batchId,
             previewSlotIndex: snapshot.previewSlotIndex,
             elapsedSec: Number(elapsedSec.toFixed(1)),
+            // Reference images actually submitted upstream; the retry offer and
+            // edit-feedback dialogs replay these so a rerun keeps its sources.
+            sourcePaths: mode === "edit" && payload.imagePaths?.length ? [...payload.imagePaths] : undefined,
             savedPath: r.savedPath,
             rawPath: r.rawPath,
           };
@@ -2785,6 +3022,84 @@ async function launchOneJob(
     });
     maybeEnqueueBatchSavePrompt(store, snapshot.workspaceId, completedNow, totalNow);
     settle("error");
+  }
+}
+
+async function reviewTasteBatchAndMaybeReplace(batchId: string, items: HistoryItem[]): Promise<void> {
+  if (useStudioStore.getState().tasteCriticRunning) {
+    setTimeout(() => {
+      if (!tasteReplacementContexts.has(batchId)) return;
+      const latestItems = useStudioStore.getState().history.filter((item) => item.batchId === batchId);
+      enqueueTasteAutoReview(batchId, latestItems.length > 0 ? latestItems : items);
+    }, 250);
+    return;
+  }
+  const context = tasteReplacementContexts.get(batchId);
+  if (!context) return;
+  const reviewed = await useStudioStore.getState().reviewBatchWithTasteCritic({
+    items,
+    silent: true,
+    hardGateOverride: context.hardGateOverride,
+  });
+  if (!reviewed) {
+    if (useStudioStore.getState().tasteCriticRunning && tasteReplacementContexts.has(batchId)) {
+      setTimeout(() => {
+        if (!tasteReplacementContexts.has(batchId)) return;
+        const latestItems = useStudioStore.getState().history.filter((item) => item.batchId === batchId);
+        enqueueTasteAutoReview(batchId, latestItems.length > 0 ? latestItems : items);
+      }, 250);
+      return;
+    }
+    tasteReplacementContexts.delete(batchId);
+    return;
+  }
+  const reviewedItems = useStudioStore.getState().history.filter((item) => item.batchId === batchId);
+  const replacementPlan = planTasteCriticReplacements(context.initialCount, reviewedItems, context.attempted);
+  const replacementCount = replacementPlan.replacementCount;
+  if (replacementPlan.exhausted) {
+    useStudioStore.getState().pushToast(
+      `补抽后仍只有 ${replacementPlan.eligibleCount}/${replacementPlan.targetEligible} 张通过硬门，请查看 DQ 原因后决定是否重试`,
+      "warn",
+      7000,
+    );
+    tasteReplacementContexts.delete(batchId);
+    return;
+  }
+  if (replacementCount <= 0) {
+    tasteReplacementContexts.delete(batchId);
+    return;
+  }
+
+  context.attempted = true;
+  context.roundTotal = replacementCount;
+  context.roundSettled = 0;
+  context.roundSucceeded = 0;
+  const state = useStudioStore.getState();
+  const jobsTotal = replacementCount;
+  const runPatch: WorkspacePatch = {
+    jobsTotal,
+    jobsCompleted: 0,
+    runningJobs: [],
+  };
+  useStudioStore.setState((current) => ({
+    workspaces: patchWorkspaceRuntime(current.workspaces, context.workspaceId, runPatch),
+    ...(current.activeWorkspaceId === context.workspaceId ? activeRuntimePatch(runPatch) : {}),
+  } as Partial<StudioState>));
+  state.pushToast(`发现 ${replacementCount} 个硬门失败结果，正用原提示词补抽一次`, "info", 5000);
+
+  const startIndex = Math.max(
+    context.initialCount,
+    ...reviewedItems.map((item) => (item.batchIndex ?? -1) + 1),
+  );
+  for (let index = 0; index < replacementCount; index += 1) {
+    const seed = context.payload.seed ? context.payload.seed + startIndex + index : 0;
+    void launchOneJob(context.mode, { ...context.payload, seed }, {
+      ...context.snapshotBase,
+      batchIndex: startIndex + index,
+      previewSlotIndex: undefined,
+    }, {
+      onSettled: (status) => settleTasteGenerationRound(batchId, status),
+    });
   }
 }
 

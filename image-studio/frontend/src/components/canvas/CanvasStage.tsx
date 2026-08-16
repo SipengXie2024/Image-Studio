@@ -16,8 +16,13 @@ import { StreamPreviewBadge } from "./StreamPreviewBadge";
 import { streamPreviewItemsFromPreviews } from "../../state/studioStore.streamPreview";
 import { historyFullSrc, orderedNavigationItemsForCurrent, sortHistoryItemsByCreatedAtAsc } from "../../lib/images";
 import { DragExportHandle } from "./DragExportHandle";
+import {
+  FeedbackModal,
+  type BatchReviewCallbacks,
+  type FeedbackModalRequest,
+} from "../taste/FeedbackModal";
 
-export function CanvasStage() {
+export function CanvasStage({ reviewCallbacks }: { reviewCallbacks?: BatchReviewCallbacks } = {}) {
   const {
     currentImage, tool, brushSize, brushMode,
     annotationKind, annotationColor,
@@ -36,7 +41,9 @@ export function CanvasStage() {
     jobsCompleted,
     toggleFullscreen,
     history,
-    batchResults, resultGridOpen, selectBatchResult, closeResultGrid,
+    batchResults, resultGridOpen, selectBatchResult, closeResultGrid, materializeCurrentImage,
+    pickBatchResult, editBatchResult, rejectBatch,
+    tasteCriticRunning, tasteCriticError, tasteCriticBatchId, reviewBatchWithTasteCritic,
     canvasViewResetTick,
     stepBatchResult,
   } = useStudioStore();
@@ -74,6 +81,11 @@ export function CanvasStage() {
   const showingResultGrid = showingLiveBatchGrid || (resultGridOpen && batchResults.length > 1);
   const currentBatchIndex = currentImage ? navigationItems.findIndex((item) => item.id === currentImage.id) : -1;
   const canNavigateBatchResults = currentBatchIndex >= 0 && navigationItems.length > 1;
+  const storedReviewCallbacks = batchResults.length > 0 && batchResults.every((item) => !!item.batchId)
+    ? { onPick: pickBatchResult, onEdit: editBatchResult, onReject: rejectBatch }
+    : undefined;
+  const activeReviewCallbacks = reviewCallbacks ?? storedReviewCallbacks;
+  const [feedbackRequest, setFeedbackRequest] = useState<FeedbackModalRequest | null>(null);
 
   // Hold-space-for-pan: while space is held, override tool to "pan".
   const [spacePan, setSpacePan] = useState(false);
@@ -486,10 +498,17 @@ export function CanvasStage() {
             slots={showingLiveBatchGrid ? liveBatchSlots : undefined}
             currentId={currentImage?.id ?? null}
             onSelect={selectBatchResult}
+            onPreview={materializeCurrentImage}
             onClose={closeResultGrid}
             showClose={!showingLiveBatchGrid}
             title={showingLiveBatchGrid ? `当前并发预览 · ${runningJobs.length} 路 · ${jobsCompleted}/${jobsTotal}` : undefined}
             livePreview={showingLiveBatchGrid}
+            onPick={activeReviewCallbacks?.onPick}
+            onEdit={activeReviewCallbacks?.onEdit ? (item) => setFeedbackRequest({ kind: "edit", item, items: [...orderedBatchResults] }) : undefined}
+            onRejectAll={activeReviewCallbacks?.onReject ? (items) => setFeedbackRequest({ kind: "reject", items }) : undefined}
+            criticRunning={tasteCriticRunning}
+            criticError={tasteCriticBatchId === orderedBatchResults[0]?.batchId ? tasteCriticError : null}
+            onRunCritic={() => reviewBatchWithTasteCritic({ items: orderedBatchResults })}
           />
         )}
         {!showingResultGrid && currentImage && compareB && (
@@ -631,6 +650,20 @@ export function CanvasStage() {
           y={canvasMenu.y}
           items={canvasMenuItems}
           onClose={() => setCanvasMenu(null)}
+        />
+      ) : null}
+      {feedbackRequest ? (
+        <FeedbackModal
+          request={feedbackRequest}
+          onClose={() => setFeedbackRequest(null)}
+          onSubmit={async (note, keepSourcePaths) => {
+            if (feedbackRequest.kind === "edit") {
+              await activeReviewCallbacks?.onEdit?.({ item: feedbackRequest.item, items: feedbackRequest.items, note, keepSourcePaths });
+            } else {
+              await activeReviewCallbacks?.onReject?.({ items: feedbackRequest.items, note });
+            }
+            setFeedbackRequest(null);
+          }}
         />
       ) : null}
     </>

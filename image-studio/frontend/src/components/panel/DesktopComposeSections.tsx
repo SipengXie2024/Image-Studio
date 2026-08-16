@@ -112,33 +112,6 @@ export function DesktopComposeSections({
 
   return (
     <>
-      <section className="platform-card px-4 py-3.5">
-        <div className="mb-1.5 flex items-center justify-between">
-          <label className="text-[11px] uppercase tracking-[0.12em] text-zinc-400 dark:text-zinc-500">风格</label>
-          {styleTag ? (
-            <button onClick={() => setField("styleTag", "")} className="text-[11px] text-[var(--accent)] hover:opacity-80">清除</button>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {STYLE_CHIPS.map((style) => {
-            const active = styleTag === style.id;
-            return (
-              <button
-                key={style.id}
-                onClick={() => setField("styleTag", active ? "" : style.id)}
-                className={`platform-chip px-2.5 py-1.5 text-xs ring-1 transition-colors ${
-                  active
-                    ? "active bg-[var(--accent-soft)] text-[var(--accent)] ring-[color:var(--accent)]/20"
-                    : "text-zinc-600 dark:text-zinc-400 ring-black/[0.08] dark:ring-white/[0.08] hover:text-zinc-900 dark:hover:text-zinc-200 hover:ring-[color:var(--accent)]/30"
-                } ${usesFluentUI ? "rounded-[8px]" : "rounded-full"}`}
-              >
-                {style.label}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
       {mode === "edit" && editSourceMode === "manual" ? (
         <Section label="源图尺寸策略">
           <div className="space-y-2">

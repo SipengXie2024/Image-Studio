@@ -414,7 +414,7 @@ function AndroidCanvasHeader({
             className={`android-canvas-status-chip ${gridOpen ? "active" : ""}`}
             onClick={onOpenGrid}
           >
-            {gridOpen ? "单图" : `${batchCount} 图`}
+            {gridOpen ? "进入单图" : `对比 ${batchCount}`}
           </button>
         ) : null}
         {hasSources ? (
